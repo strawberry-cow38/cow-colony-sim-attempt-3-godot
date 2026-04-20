@@ -1,12 +1,16 @@
-using Godot;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using Godot;
 using CowColonySim.Sim.Grid;
+using GArray = Godot.Collections.Array;
 
 namespace CowColonySim.Render;
 
 public sealed partial class GridRenderer : Node3D
 {
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
+    private readonly ConcurrentQueue<(TilePos ChunkKey, MeshBuildResult? Result)> _completed = new();
     private readonly IChunkMesher _mesher = new NaiveChunkMesher();
 
     private SimHost? _simHost;
@@ -26,6 +30,15 @@ public sealed partial class GridRenderer : Node3D
     {
         if (_simHost == null) return;
 
+        while (_completed.TryDequeue(out var pack))
+        {
+            var (chunkKey, result) = pack;
+            if (!_slots.TryGetValue(chunkKey, out var slot)) continue;
+            slot.InFlight = false;
+            slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
+            slot.UploadedRevision = result?.Revision ?? slot.RequestedRevision;
+        }
+
         foreach (var kv in _simHost.Tiles.EnumerateChunks())
         {
             var chunkKey = kv.Key;
@@ -36,8 +49,18 @@ public sealed partial class GridRenderer : Node3D
                 AddChild(slot.MeshInstance);
                 _slots[chunkKey] = slot;
             }
-            if (slot.LastRevision == chunk.Revision) continue;
-            RebuildSlot(slot, chunk, chunkKey);
+            if (slot.InFlight) continue;
+            if (chunk.Revision == slot.UploadedRevision) continue;
+
+            var snap = chunk.Snapshot();
+            slot.InFlight = true;
+            slot.RequestedRevision = snap.Revision;
+            var key = chunkKey;
+            Task.Run(() =>
+            {
+                var r = _mesher.BuildMeshData(snap, 0);
+                _completed.Enqueue((key, r));
+            });
         }
     }
 
@@ -50,17 +73,24 @@ public sealed partial class GridRenderer : Node3D
         };
     }
 
-    private void RebuildSlot(ChunkRenderSlot slot, Chunk chunk, TilePos chunkKey)
+    private static ArrayMesh AssembleArrayMesh(MeshBuildResult r)
     {
-        var snap = chunk.Snapshot();
-        var mesh = _mesher.BuildMesh(snap, lodLevel: 0);
-        slot.MeshInstance.Mesh = mesh;
-        slot.LastRevision = snap.Revision;
+        var arrays = new GArray();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = r.Verts;
+        arrays[(int)Mesh.ArrayType.Normal] = r.Normals;
+        arrays[(int)Mesh.ArrayType.Color] = r.Colors;
+        arrays[(int)Mesh.ArrayType.Index] = r.Indices;
+        var mesh = new ArrayMesh();
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        return mesh;
     }
 
     private sealed class ChunkRenderSlot
     {
         public MeshInstance3D MeshInstance = null!;
-        public int LastRevision = -1;
+        public int UploadedRevision = -1;
+        public int RequestedRevision = -1;
+        public bool InFlight;
     }
 }

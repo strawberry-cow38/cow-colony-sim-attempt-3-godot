@@ -1,3 +1,5 @@
+using System.Threading.Tasks;
+
 namespace CowColonySim.Sim.Grid;
 
 public static class WorldGen
@@ -21,16 +23,31 @@ public static class WorldGen
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
         var range = maxHeight - minHeight;
+
+        var heights = new int[sizeX, sizeZ];
+        Parallel.For(0, sizeX, xi =>
+        {
+            for (var zi = 0; zi < sizeZ; zi++)
+            {
+                var x = xi - halfX;
+                var z = zi - halfZ;
+                var n = noise.GetNoise(x, z);
+                var norm = (n + 1f) * 0.5f;
+                var h = minHeight + (int)MathF.Round(norm * range);
+                if (h < 1) h = 1;
+                heights[xi, zi] = h;
+            }
+        });
+
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
         var surfaceTiles = 0;
-        for (var x = -halfX; x < sizeX - halfX; x++)
-        for (var z = -halfZ; z < sizeZ - halfZ; z++)
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
         {
-            var n = noise.GetNoise(x, z);
-            var norm = (n + 1f) * 0.5f;
-            var height = minHeight + (int)MathF.Round(norm * range);
-            if (height < 1) height = 1;
+            var height = heights[xi, zi];
+            var x = xi - halfX;
+            var z = zi - halfZ;
             for (var y = 0; y < height - 1; y++)
             {
                 tiles.Set(new TilePos(x, y, z), solid);

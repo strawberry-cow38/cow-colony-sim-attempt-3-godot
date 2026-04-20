@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using Godot;
 using CowColonySim.Sim.Grid;
-using GArray = Godot.Collections.Array;
 
 namespace CowColonySim.Render;
 
@@ -17,7 +16,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
         ( 0,  0, -1, new Vector3( 0, 0,-1)),
     };
 
-    public ArrayMesh? BuildMesh(ChunkSnapshot snapshot, int lodLevel)
+    public MeshBuildResult? BuildMeshData(ChunkSnapshot snapshot, int lodLevel)
     {
         var verts = new List<Vector3>();
         var normals = new List<Vector3>();
@@ -51,16 +50,14 @@ public sealed class NaiveChunkMesher : IChunkMesher
 
         if (indices.Count == 0) return null;
 
-        var arrays = new GArray();
-        arrays.Resize((int)Mesh.ArrayType.Max);
-        arrays[(int)Mesh.ArrayType.Vertex] = verts.ToArray();
-        arrays[(int)Mesh.ArrayType.Normal] = normals.ToArray();
-        arrays[(int)Mesh.ArrayType.Color] = colors.ToArray();
-        arrays[(int)Mesh.ArrayType.Index] = indices.ToArray();
-
-        var mesh = new ArrayMesh();
-        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-        return mesh;
+        return new MeshBuildResult
+        {
+            Verts = verts.ToArray(),
+            Normals = normals.ToArray(),
+            Colors = colors.ToArray(),
+            Indices = indices.ToArray(),
+            Revision = snapshot.Revision,
+        };
     }
 
     private static void EmitFace(

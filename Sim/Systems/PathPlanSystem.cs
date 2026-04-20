@@ -1,3 +1,4 @@
+using System.Threading.Tasks;
 using fennecs;
 using CowColonySim.Sim.Components;
 using CowColonySim.Sim.Grid;
@@ -9,15 +10,24 @@ public static class PathPlanSystem
 {
     public static void Step(World world, TileWorld tiles)
     {
-        var toPlan = new List<(Entity Entity, TilePos Start, TilePos Goal)>();
+        var requests = new List<(Entity Entity, TilePos Start, TilePos Goal)>();
         world.Stream<Position, PathRequest>().For((in Entity e, ref Position p, ref PathRequest req) =>
         {
-            toPlan.Add((e, TileMath.TileAt(p), req.Goal));
+            requests.Add((e, TileMath.TileAt(p), req.Goal));
+        });
+        if (requests.Count == 0) return;
+
+        var results = new (TilePos[]? Path, TilePos Start)[requests.Count];
+        Parallel.For(0, requests.Count, i =>
+        {
+            var (_, start, goal) = requests[i];
+            results[i] = (AStarPathfinder.FindPath(tiles, start, goal), start);
         });
 
-        foreach (var (e, start, goal) in toPlan)
+        for (var i = 0; i < requests.Count; i++)
         {
-            var path = AStarPathfinder.FindPath(tiles, start, goal);
+            var (e, _, _) = requests[i];
+            var (path, start) = results[i];
             e.Remove<PathRequest>();
             if (path != null && path.Length >= 1)
                 e.Add(new PathCurrent(path, path[0] == start ? 1 : 0));
