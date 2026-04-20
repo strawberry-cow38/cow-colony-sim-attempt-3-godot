@@ -1,0 +1,37 @@
+# Godot 4+
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+
+# Imports (regenerated from source assets)
+*.import
+
+# System / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# C# / .NET
+bin/
+obj/
+*.user
+*.suo
+*.sln.DotSettings.user
+.mono/
+*.csproj.user
+
+# Builds
+build/
+dist/
+*.exe
+*.pck
+*.zip
+*.apk
+*.ipa
+*.dmg
+
+# Logs
+*.log
