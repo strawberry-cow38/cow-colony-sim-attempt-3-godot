@@ -162,7 +162,6 @@ public sealed partial class GridRenderer : Node3D
             slot.MeshInstance.Visible = true;
             if (slot.InFlight) continue;
 
-            var snapshots = new ChunkSnapshot?[groupSize, groupSize];
             long maskHash = 0;
             long revHash = 0;
             foreach (var ck in chunkKeys)
@@ -171,7 +170,6 @@ public sealed partial class GridRenderer : Node3D
                 if (chunk == null) continue;
                 var lx = ck.X - groupKey.X;
                 var lz = ck.Z - groupKey.Z;
-                snapshots[lx, lz] = chunk.Snapshot();
                 unchecked
                 {
                     maskHash = maskHash * 31 + (lx * groupSize + lz) + 1;
@@ -179,6 +177,16 @@ public sealed partial class GridRenderer : Node3D
                 }
             }
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
+
+            var snapshots = new ChunkSnapshot?[groupSize, groupSize];
+            foreach (var ck in chunkKeys)
+            {
+                var chunk = _simHost!.Tiles.GetChunkOrNull(ck);
+                if (chunk == null) continue;
+                var lx = ck.X - groupKey.X;
+                var lz = ck.Z - groupKey.Z;
+                snapshots[lx, lz] = chunk.Snapshot();
+            }
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
