@@ -11,7 +11,7 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
-	public const int WorldSize = 800;
+	public const int WorldSize = 1600;
 	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 
