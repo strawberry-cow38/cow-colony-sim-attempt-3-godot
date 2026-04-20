@@ -9,4 +9,9 @@
   <ItemGroup>
     <PackageReference Include="Fennecs" Version="0.5.*" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="launcher/**" />
+    <None Remove="launcher/**" />
+    <EmbeddedResource Remove="launcher/**" />
+  </ItemGroup>
 </Project>
