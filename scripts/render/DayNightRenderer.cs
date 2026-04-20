@@ -98,8 +98,8 @@ public sealed partial class DayNightRenderer : Node3D
             GlowBloom = 0.15f,
             GlowHdrThreshold = 1.0f,
             GlowStrength = 1.1f,
-            ToneMapper = Godot.Environment.ToneMapper.Filmic,
-            ToneMapExposure = 1.0f,
+            TonemapMode = Godot.Environment.ToneMapper.Filmic,
+            TonemapExposure = 1.0f,
         };
         _worldEnv.Environment = env;
     }
