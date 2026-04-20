@@ -11,7 +11,8 @@ starts from zero.
 
 - **Engine:** Godot 4.3+ — **native only, Vulkan forward+.** No web export. Linux + Windows desktop primary; mobile (APK / iOS) secondary target later.
 - **Language:** C# for sim core (ECS, systems, hot loops). GDScript for UI glue + editor tooling.
-- **Rendering:** Godot's built-in Vulkan pipeline — proper OIT, shadows, post-fx, GI, compute shaders. No compat-renderer restrictions.
+- **ECS:** [Fennecs](https://fennecs.tech) — small archetype ECS library, MIT, ergonomic Stream/Query API. No hand-rolling this time.
+- **Rendering:** Godot's built-in Vulkan pipeline — proper OIT, shadows, post-fx, GI, compute shaders. No compat-renderer restrictions. **MultiMeshInstance3D pools** per visual type for all entities (cows, items, projectiles, trees, crops). Nodes reserved for cameras / lights / UI / terrain chunks / building prefabs.
 - **Threading:** real threads via `Task` / `Parallel.For` for cow brains + pathfinding + job board.
 - **Save:** Godot `Resource` serialization (binary or JSON) — no hand-rolled gzip+migrations.
 
