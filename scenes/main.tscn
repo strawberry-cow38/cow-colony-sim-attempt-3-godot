@@ -1,17 +1,21 @@
-[gd_scene load_steps=6 format=3 uid="uid://b0cowcolsimmain"]
+[gd_scene load_steps=7 format=3 uid="uid://b0cowcolsimmain"]
 
 [ext_resource type="Script" path="res://scripts/core/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://scripts/render/GridRenderer.cs" id="2_grid"]
 [ext_resource type="Script" path="res://scripts/render/OrbitCamera.cs" id="3_orbit"]
 [ext_resource type="Script" path="res://scripts/render/ColonistRenderer.cs" id="4_colonist"]
 [ext_resource type="Script" path="res://scripts/ui/SettingsMenu.cs" id="5_settings"]
+[ext_resource type="Script" path="res://scripts/render/DayNightRenderer.cs" id="6_daynight"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(0.866025, -0.433013, 0.25, 0, 0.5, 0.866025, -0.5, -0.75, 0.433013, 0, 10, 0)
+[node name="Sun" type="DirectionalLight3D" parent="."]
 shadow_enabled = true
+
+[node name="Moon" type="DirectionalLight3D" parent="."]
+shadow_enabled = true
+light_energy = 0.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 
@@ -26,3 +30,9 @@ script = ExtResource("4_colonist")
 
 [node name="SettingsMenu" type="CanvasLayer" parent="."]
 script = ExtResource("5_settings")
+
+[node name="DayNightRenderer" type="Node3D" parent="."]
+script = ExtResource("6_daynight")
+SunPath = NodePath("../Sun")
+MoonPath = NodePath("../Moon")
+WorldEnvPath = NodePath("../WorldEnvironment")

@@ -18,5 +18,8 @@ public static class SimConstants
     public const int HeadroomTiles = 2;
     public const int ChunkSize = 16;
 
+    public const int SecondsPerDay = 60 * 24;
+    public const int TicksPerDay = SimHz * SecondsPerDay;
+
     public static readonly SimSpeed[] SpeedSteps = { SimSpeed.X1, SimSpeed.X2, SimSpeed.X3, SimSpeed.X6 };
 }

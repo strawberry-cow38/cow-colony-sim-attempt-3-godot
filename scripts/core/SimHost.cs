@@ -17,6 +17,7 @@ public partial class SimHost : Node
 	public World World { get; } = new();
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
+	public TimeOfDaySystem TimeOfDay { get; } = new();
 
 	private readonly Random _rng = new(WorldSeed);
 
@@ -31,6 +32,7 @@ public partial class SimHost : Node
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
+		TimeOfDay.SetTicks((long)(SimConstants.TicksPerDay * 0.30f));
 		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
 	}
 
@@ -41,6 +43,7 @@ public partial class SimHost : Node
 
 	private void Step(int tick)
 	{
+		TimeOfDay.Step();
 		WanderSystem.Step(World, Tiles, _rng);
 		PathPlanSystem.Step(World, Tiles);
 		PathFollowSystem.Step(World, (float)SimConstants.SimDt);
