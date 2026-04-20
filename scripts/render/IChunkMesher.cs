@@ -10,6 +10,7 @@ public sealed class MeshBuildResult
     public Color[] Colors = null!;
     public int[] Indices = null!;
     public int Revision;
+    public int LodLevel;
 }
 
 public interface IChunkMesher

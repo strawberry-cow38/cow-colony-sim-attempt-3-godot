@@ -9,8 +9,13 @@ namespace CowColonySim.Render;
 
 public sealed partial class GridRenderer : Node3D
 {
+    // Chunk-distance cutoffs (chebyshev) for LOD selection.
+    private const int Lod0Range = 4;   // ≤ 4 chunks: full voxel
+    private const int Lod1Range = 16;  // ≤16 chunks: heightmap 1:1
+    // else: heightmap 4:1 downsample.
+
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
-    private readonly ConcurrentQueue<(TilePos ChunkKey, MeshBuildResult? Result)> _completed = new();
+    private readonly ConcurrentQueue<(TilePos ChunkKey, MeshBuildResult? Result, int LodRequested)> _completed = new();
     private readonly IChunkMesher _mesher = new NaiveChunkMesher();
 
     private SimHost? _simHost;
@@ -32,12 +37,18 @@ public sealed partial class GridRenderer : Node3D
 
         while (_completed.TryDequeue(out var pack))
         {
-            var (chunkKey, result) = pack;
+            var (chunkKey, result, lodRequested) = pack;
             if (!_slots.TryGetValue(chunkKey, out var slot)) continue;
             slot.InFlight = false;
             slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
             slot.UploadedRevision = result?.Revision ?? slot.RequestedRevision;
+            slot.CurrentLod = result?.LodLevel ?? lodRequested;
         }
+
+        var cam = GetViewport()?.GetCamera3D();
+        var camPos = cam?.GlobalPosition ?? Vector3.Zero;
+        var camChunkX = Mathf.FloorToInt(camPos.X / (Chunk.Size * TileCoord.TileW));
+        var camChunkZ = Mathf.FloorToInt(camPos.Z / (Chunk.Size * TileCoord.TileW));
 
         foreach (var kv in _simHost.Tiles.EnumerateChunks())
         {
@@ -45,21 +56,29 @@ public sealed partial class GridRenderer : Node3D
             var chunk = kv.Value;
             if (!_slots.TryGetValue(chunkKey, out var slot))
             {
-                slot = new ChunkRenderSlot { MeshInstance = BuildInstance(chunkKey) };
+                slot = new ChunkRenderSlot { MeshInstance = BuildInstance(chunkKey), CurrentLod = -1 };
                 AddChild(slot.MeshInstance);
                 _slots[chunkKey] = slot;
             }
             if (slot.InFlight) continue;
-            if (chunk.Revision == slot.UploadedRevision) continue;
+
+            var dx = System.Math.Abs(chunkKey.X - camChunkX);
+            var dz = System.Math.Abs(chunkKey.Z - camChunkZ);
+            var d = System.Math.Max(dx, dz);
+            var desiredLod = d <= Lod0Range ? 0 : d <= Lod1Range ? 1 : 2;
+
+            var needsRemesh = slot.CurrentLod != desiredLod || chunk.Revision != slot.UploadedRevision;
+            if (!needsRemesh) continue;
 
             var snap = chunk.Snapshot();
             slot.InFlight = true;
             slot.RequestedRevision = snap.Revision;
             var key = chunkKey;
+            var lod = desiredLod;
             Task.Run(() =>
             {
-                var r = _mesher.BuildMeshData(snap, 0);
-                _completed.Enqueue((key, r));
+                var r = _mesher.BuildMeshData(snap, lod);
+                _completed.Enqueue((key, r, lod));
             });
         }
     }
@@ -91,6 +110,7 @@ public sealed partial class GridRenderer : Node3D
         public MeshInstance3D MeshInstance = null!;
         public int UploadedRevision = -1;
         public int RequestedRevision = -1;
+        public int CurrentLod = -1;
         public bool InFlight;
     }
 }
