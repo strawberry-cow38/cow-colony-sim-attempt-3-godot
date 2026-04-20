@@ -3,12 +3,24 @@ namespace CowColonySim.Sim.Grid;
 public sealed class TileWorld
 {
     private readonly Dictionary<TilePos, Chunk> _chunks = new();
+    private readonly Dictionary<TilePos, ChunkState> _chunkStates = new();
 
     public int ChunkCount => _chunks.Count;
 
     public IEnumerable<KeyValuePair<TilePos, Chunk>> EnumerateChunks() => _chunks;
 
     public Chunk? GetChunkOrNull(TilePos chunkKey) => _chunks.TryGetValue(chunkKey, out var c) ? c : null;
+
+    public ChunkState GetChunkState(TilePos chunkKey)
+        => _chunkStates.TryGetValue(chunkKey, out var s) ? s : ChunkState.Dormant;
+
+    public IReadOnlyDictionary<TilePos, ChunkState> ChunkStates => _chunkStates;
+
+    public void ReplaceChunkStates(IReadOnlyDictionary<TilePos, ChunkState> next)
+    {
+        _chunkStates.Clear();
+        foreach (var kv in next) _chunkStates[kv.Key] = kv.Value;
+    }
 
     public Tile Get(TilePos pos)
     {

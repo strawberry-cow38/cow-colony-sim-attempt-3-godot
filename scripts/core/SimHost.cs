@@ -22,7 +22,9 @@ public partial class SimHost : Node
 	{
 		World.Spawn().Add(new Position(0, 0));
 		SeedDemoPyramid();
-		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}.");
+		SeedDemoColony();
+		ChunkTierSystem.Step(World, Tiles);
+		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
 	}
 
 	public override void _Process(double delta)
@@ -33,6 +35,16 @@ public partial class SimHost : Node
 	private void Step(int tick)
 	{
 		DemoWanderSystem.Step(World);
+		if (tick % SimConstants.SimHz == 0) ChunkTierSystem.Step(World, Tiles);
+	}
+
+	private void SeedDemoColony()
+	{
+		World.Spawn().Add(new ClaimedRegion(
+			new TilePos(-100, 0, -100),
+			new TilePos(100, 32, 100),
+			ChunkState.Ambient));
+		World.Spawn().Add(new LiveAnchor(new TilePos(0, 8, 0), 24));
 	}
 
 	private void SeedDemoPyramid()
