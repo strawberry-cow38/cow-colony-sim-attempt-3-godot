@@ -8,6 +8,7 @@ public sealed class MeshBuildResult
     public Vector3[] Verts = null!;
     public Vector3[] Normals = null!;
     public Color[] Colors = null!;
+    public Vector2[] Uvs = null!;
     public int[] Indices = null!;
     public int Revision;
     public int LodLevel;
@@ -15,5 +16,5 @@ public sealed class MeshBuildResult
 
 public interface IChunkMesher
 {
-    MeshBuildResult? BuildMeshData(ChunkSnapshot snapshot, int lodLevel);
+    MeshBuildResult? BuildMeshData(ChunkSnapshot snapshot, TilePos chunkKey, int lodLevel);
 }

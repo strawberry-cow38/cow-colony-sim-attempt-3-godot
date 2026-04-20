@@ -24,10 +24,13 @@ public sealed partial class GridRenderer : Node3D
     public override void _Ready()
     {
         _simHost = GetNode<SimHost>("/root/SimHost");
+        var tex = GD.Load<Texture2D>("res://textures/grass-atlas.jpg");
         _material = new StandardMaterial3D
         {
+            AlbedoTexture = tex,
             VertexColorUseAsAlbedo = true,
-            Roughness = 0.9f,
+            Roughness = 0.95f,
+            TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
         };
     }
 
@@ -77,7 +80,7 @@ public sealed partial class GridRenderer : Node3D
             var lod = desiredLod;
             Task.Run(() =>
             {
-                var r = _mesher.BuildMeshData(snap, lod);
+                var r = _mesher.BuildMeshData(snap, key, lod);
                 _completed.Enqueue((key, r, lod));
             });
         }
@@ -99,6 +102,7 @@ public sealed partial class GridRenderer : Node3D
         arrays[(int)Mesh.ArrayType.Vertex] = r.Verts;
         arrays[(int)Mesh.ArrayType.Normal] = r.Normals;
         arrays[(int)Mesh.ArrayType.Color] = r.Colors;
+        arrays[(int)Mesh.ArrayType.TexUV] = r.Uvs;
         arrays[(int)Mesh.ArrayType.Index] = r.Indices;
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
