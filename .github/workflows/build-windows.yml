@@ -101,17 +101,62 @@ jobs:
           EOF
           cat build/windows/version.txt
 
-      - name: Zip Windows build
+      - name: Bundle release assets (per-file + manifest)
+        env:
+          BUILD_TAG: ${{ steps.meta.outputs.build_tag }}
+          BUILD_DATE: ${{ steps.meta.outputs.build_date }}
+          BUILD_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
           cd build/windows
-          zip -r -q "$GITHUB_WORKSPACE/CowColonySim-windows-x86_64.zip" .
-          ls -la "$GITHUB_WORKSPACE/CowColonySim-windows-x86_64.zip"
+          if [ -d GodotSharp ]; then
+            zip -r -q GodotSharp.zip GodotSharp
+          fi
+          python3 - <<'PY'
+          import hashlib, json, os, sys
+          def sha(path):
+              h = hashlib.sha256()
+              with open(path, 'rb') as f:
+                  for chunk in iter(lambda: f.read(1 << 20), b''):
+                      h.update(chunk)
+              return h.hexdigest()
+          files, archives = [], []
+          for name in sorted(os.listdir('.')):
+              if name == 'manifest.json' or name == 'GodotSharp' or name.startswith('.'):
+                  continue
+              if not os.path.isfile(name):
+                  continue
+              entry = {'name': name, 'sha256': sha(name), 'size': os.path.getsize(name)}
+              if name == 'GodotSharp.zip':
+                  entry['extract_to'] = 'GodotSharp'
+                  archives.append(entry)
+              else:
+                  files.append(entry)
+          manifest = {
+              'tag':      os.environ['BUILD_TAG'],
+              'date':     os.environ['BUILD_DATE'],
+              'sha':      os.environ['BUILD_SHA'],
+              'files':    files,
+              'archives': archives,
+          }
+          with open('manifest.json', 'w') as f:
+              json.dump(manifest, f, indent=2)
+          PY
+          ls -la
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          cd build/windows
+          assets=(manifest.json)
+          for f in *; do
+            [ -f "$f" ] || continue
+            [ "$f" = "manifest.json" ] && continue
+            assets+=("$f")
+          done
           gh release create "${{ steps.meta.outputs.build_tag }}" \
             --title "${{ steps.meta.outputs.build_tag }}" \
             --notes "Automated build from \`${{ steps.meta.outputs.short_sha }}\` at ${{ steps.meta.outputs.build_date }}." \
-            CowColonySim-windows-x86_64.zip
+            "${assets[@]}"

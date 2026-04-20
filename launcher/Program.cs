@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
+using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace CowLauncher;
@@ -23,14 +26,19 @@ internal sealed record BuildInfo(string Tag, DateTime? Date)
         Date is null ? "unknown" : Date.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 }
 
-internal sealed record RemoteRelease(BuildInfo Info, string DownloadUrl, long SizeBytes);
+internal sealed record ManifestEntry(string Name, string Sha256, long Size, string? ExtractTo);
+
+internal sealed record RemoteManifest(
+    BuildInfo Info,
+    IReadOnlyList<ManifestEntry> Files,
+    IReadOnlyList<ManifestEntry> Archives,
+    IReadOnlyDictionary<string, string> AssetUrls);
 
 internal sealed class LauncherForm : Form
 {
     private const string RepoOwner = "strawberry-cow38";
-    private const string RepoName = "cow-colony-sim-attempt-3-godot";
-    private const string AssetName = "CowColonySim-windows-x86_64.zip";
-    private const string GameExe = "CowColonySim.exe";
+    private const string RepoName  = "cow-colony-sim-attempt-3-godot";
+    private const string GameExe   = "CowColonySim.exe";
 
     private static readonly string InstallRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -90,7 +98,7 @@ internal sealed class LauncherForm : Form
     };
 
     private BuildInfo _installed = BuildInfo.Unknown;
-    private RemoteRelease? _remote;
+    private RemoteManifest? _remote;
 
     public LauncherForm()
     {
@@ -108,7 +116,7 @@ internal sealed class LauncherForm : Form
         _buttonRow.Controls.Add(_playButton);
         _buttonRow.Controls.Add(_updateButton);
 
-        _playButton.Click += async (_, _) => await LaunchGameAsync();
+        _playButton.Click   += async (_, _) => await LaunchGameAsync();
         _updateButton.Click += async (_, _) => await RunUpdateAsync();
 
         Load += async (_, _) => await InitAsync();
@@ -121,7 +129,7 @@ internal sealed class LauncherForm : Form
 
         try
         {
-            _remote = await FetchLatestReleaseAsync();
+            _remote = await FetchLatestManifestAsync();
         }
         catch (Exception ex)
         {
@@ -166,7 +174,7 @@ internal sealed class LauncherForm : Form
         }
     }
 
-    private void RenderVersions(RemoteRelease? remote)
+    private void RenderVersions(RemoteManifest? remote)
     {
         var installedLine = $"installed: {_installed.Tag,-28} ({_installed.FormatDate()})";
         var remoteLine = remote is null
@@ -193,7 +201,7 @@ internal sealed class LauncherForm : Form
             var val = line[(eq + 1)..].Trim();
             if (key == "tag") tag = val;
             else if (key == "date" && DateTime.TryParse(val, null,
-                         System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+                         DateTimeStyles.RoundtripKind, out var parsed))
             {
                 date = parsed;
             }
@@ -205,56 +213,71 @@ internal sealed class LauncherForm : Form
     private static bool IsInstalled() =>
         File.Exists(Path.Combine(InstallRoot, GameExe));
 
-    private static async Task<RemoteRelease?> FetchLatestReleaseAsync()
+    private static async Task<RemoteManifest?> FetchLatestManifestAsync()
     {
         using var http = CreateHttpClient();
         var url = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
         using var res = await http.GetAsync(url);
-        if (res.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return null;
-        }
+        if (res.StatusCode == HttpStatusCode.NotFound) return null;
         res.EnsureSuccessStatusCode();
 
-        var json = await res.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
         var root = doc.RootElement;
 
-        var tag = root.GetProperty("tag_name").GetString() ?? "(unknown)";
-        DateTime? publishedAt = null;
-        if (root.TryGetProperty("published_at", out var pub) &&
-            pub.ValueKind == JsonValueKind.String &&
-            DateTime.TryParse(pub.GetString(), null,
-                System.Globalization.DateTimeStyles.RoundtripKind, out var p))
+        var assetUrls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string? manifestUrl = null;
+        if (root.TryGetProperty("assets", out var arr) && arr.ValueKind == JsonValueKind.Array)
         {
-            publishedAt = p;
-        }
-
-        string? downloadUrl = null;
-        long size = 0;
-        if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var asset in assets.EnumerateArray())
+            foreach (var a in arr.EnumerateArray())
             {
-                var name = asset.GetProperty("name").GetString();
-                if (string.Equals(name, AssetName, StringComparison.OrdinalIgnoreCase))
+                var n = a.GetProperty("name").GetString();
+                var u = a.GetProperty("browser_download_url").GetString();
+                if (n is null || u is null) continue;
+                assetUrls[n] = u;
+                if (string.Equals(n, "manifest.json", StringComparison.OrdinalIgnoreCase))
                 {
-                    downloadUrl = asset.GetProperty("browser_download_url").GetString();
-                    if (asset.TryGetProperty("size", out var s) && s.ValueKind == JsonValueKind.Number)
-                    {
-                        size = s.GetInt64();
-                    }
-                    break;
+                    manifestUrl = u;
                 }
             }
         }
 
-        if (downloadUrl is null)
+        if (manifestUrl is null) return null;
+
+        var manifestJson = await http.GetStringAsync(manifestUrl);
+        using var mdoc = JsonDocument.Parse(manifestJson);
+        var mroot = mdoc.RootElement;
+
+        var tag = mroot.TryGetProperty("tag", out var tagEl) ? tagEl.GetString() ?? "(unknown)" : "(unknown)";
+        DateTime? date = null;
+        if (mroot.TryGetProperty("date", out var dEl) && dEl.ValueKind == JsonValueKind.String &&
+            DateTime.TryParse(dEl.GetString(), null, DateTimeStyles.RoundtripKind, out var parsed))
         {
-            return null;
+            date = parsed;
         }
 
-        return new RemoteRelease(new BuildInfo(tag, publishedAt), downloadUrl, size);
+        var files    = ParseEntries(mroot, "files", extractTo: null);
+        var archives = ParseEntries(mroot, "archives", extractTo: "");
+
+        return new RemoteManifest(new BuildInfo(tag, date), files, archives, assetUrls);
+    }
+
+    private static List<ManifestEntry> ParseEntries(JsonElement root, string key, string? extractTo)
+    {
+        var list = new List<ManifestEntry>();
+        if (!root.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return list;
+
+        foreach (var e in arr.EnumerateArray())
+        {
+            var name = e.GetProperty("name").GetString();
+            var sha  = e.GetProperty("sha256").GetString();
+            var size = e.GetProperty("size").GetInt64();
+            if (name is null || sha is null) continue;
+            string? ex = extractTo is null ? null
+                : (e.TryGetProperty("extract_to", out var ex2) ? ex2.GetString() : null);
+            list.Add(new ManifestEntry(name, sha, size, ex));
+        }
+        return list;
     }
 
     private async Task RunUpdateAsync()
@@ -266,27 +289,90 @@ internal sealed class LauncherForm : Form
         _progress.Visible = true;
         _progress.Value = 0;
 
-        var tmpZip = Path.Combine(Path.GetTempPath(), $"CowColonySim-{Guid.NewGuid():N}.zip");
+        Directory.CreateDirectory(InstallRoot);
+
         try
         {
-            _statusLabel.Text = "Downloading...";
-            await DownloadWithProgressAsync(_remote.DownloadUrl, tmpZip, _remote.SizeBytes);
+            var pending = new List<ManifestEntry>();
+            long totalBytes = 0;
 
-            _statusLabel.Text = "Clearing old install...";
-            if (Directory.Exists(InstallRoot))
+            foreach (var f in _remote.Files)
             {
-                Directory.Delete(InstallRoot, recursive: true);
+                var local = Path.Combine(InstallRoot, f.Name);
+                if (!File.Exists(local) || !HashMatches(local, f.Sha256))
+                {
+                    pending.Add(f);
+                    totalBytes += f.Size;
+                }
             }
-            Directory.CreateDirectory(InstallRoot);
 
-            _statusLabel.Text = "Extracting...";
-            await Task.Run(() => ZipFile.ExtractToDirectory(tmpZip, InstallRoot, overwriteFiles: true));
+            foreach (var a in _remote.Archives)
+            {
+                if (string.IsNullOrEmpty(a.ExtractTo)) continue;
+                var sidecar   = SidecarPath(a.Name);
+                var extracted = Path.Combine(InstallRoot, a.ExtractTo);
+                var sidecarOk = File.Exists(sidecar) &&
+                                File.ReadAllText(sidecar).Trim()
+                                    .Equals(a.Sha256, StringComparison.OrdinalIgnoreCase);
+                if (!sidecarOk || !Directory.Exists(extracted))
+                {
+                    pending.Add(a);
+                    totalBytes += a.Size;
+                }
+            }
+
+            if (pending.Count == 0)
+            {
+                _statusLabel.Text = "All files already match manifest.";
+            }
+            else
+            {
+                var mb = Math.Max(1, totalBytes / 1024 / 1024);
+                _statusLabel.Text = $"Downloading {pending.Count} file(s), ~{mb} MB...";
+                long doneBytes = 0;
+                foreach (var entry in pending)
+                {
+                    if (!_remote.AssetUrls.TryGetValue(entry.Name, out var assetUrl))
+                    {
+                        throw new InvalidOperationException($"No release asset for {entry.Name}");
+                    }
+
+                    var tmp = Path.Combine(InstallRoot, entry.Name + ".partial");
+                    await DownloadWithProgressAsync(assetUrl, tmp, entry.Size, doneBytes, totalBytes, entry.Name);
+
+                    var actual = ComputeSha256(tmp);
+                    if (!actual.Equals(entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        File.Delete(tmp);
+                        throw new InvalidOperationException($"Hash mismatch for {entry.Name}");
+                    }
+
+                    if (!string.IsNullOrEmpty(entry.ExtractTo))
+                    {
+                        var target = Path.Combine(InstallRoot, entry.ExtractTo);
+                        if (Directory.Exists(target)) Directory.Delete(target, recursive: true);
+                        ZipFile.ExtractToDirectory(tmp, InstallRoot, overwriteFiles: true);
+                        File.Delete(tmp);
+                        File.WriteAllText(SidecarPath(entry.Name), entry.Sha256);
+                    }
+                    else
+                    {
+                        var final = Path.Combine(InstallRoot, entry.Name);
+                        if (File.Exists(final)) File.Delete(final);
+                        File.Move(tmp, final);
+                    }
+
+                    doneBytes += entry.Size;
+                }
+            }
+
+            CleanupStaleFiles(_remote);
 
             _installed = ReadInstalledVersion();
             RenderVersions(_remote);
             _statusLabel.Text = "Up to date.";
             _updateButton.Visible = false;
-            _playButton.Enabled = true;
+            _playButton.Enabled = IsInstalled();
         }
         catch (Exception ex)
         {
@@ -297,36 +383,75 @@ internal sealed class LauncherForm : Form
         finally
         {
             _progress.Visible = false;
-            if (File.Exists(tmpZip))
-            {
-                try { File.Delete(tmpZip); } catch { /* leave it */ }
-            }
         }
     }
 
-    private async Task DownloadWithProgressAsync(string url, string dest, long expectedSize)
+    private static string SidecarPath(string archiveName) =>
+        Path.Combine(InstallRoot, $".{archiveName}.sha256");
+
+    private static void CleanupStaleFiles(RemoteManifest remote)
+    {
+        var managed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in remote.Files) managed.Add(f.Name);
+        foreach (var a in remote.Archives)
+        {
+            managed.Add($".{a.Name}.sha256");
+            if (string.IsNullOrEmpty(a.ExtractTo)) continue;
+            var dir = Path.Combine(InstallRoot, a.ExtractTo);
+            if (!Directory.Exists(dir)) continue;
+            foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                managed.Add(Path.GetRelativePath(InstallRoot, file));
+            }
+        }
+
+        foreach (var file in Directory.EnumerateFiles(InstallRoot, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(InstallRoot, file);
+            if (rel.EndsWith(".partial", StringComparison.OrdinalIgnoreCase)) continue;
+            if (managed.Contains(rel)) continue;
+            try { File.Delete(file); } catch { /* ignore */ }
+        }
+    }
+
+    private static bool HashMatches(string path, string expected) =>
+        ComputeSha256(path).Equals(expected, StringComparison.OrdinalIgnoreCase);
+
+    private static string ComputeSha256(string path)
+    {
+        using var fs = File.OpenRead(path);
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(fs)).ToLowerInvariant();
+    }
+
+    private async Task DownloadWithProgressAsync(
+        string url, string dest, long expectedSize, long doneBytes, long totalBytes, string label)
     {
         using var http = CreateHttpClient();
-        using var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        using var res  = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         res.EnsureSuccessStatusCode();
 
-        var total = res.Content.Headers.ContentLength ?? expectedSize;
-        _progress.Style = total > 0 ? ProgressBarStyle.Continuous : ProgressBarStyle.Marquee;
+        var fileSize = res.Content.Headers.ContentLength ?? expectedSize;
+        _progress.Style = totalBytes > 0 ? ProgressBarStyle.Continuous : ProgressBarStyle.Marquee;
 
         await using var src = await res.Content.ReadAsStreamAsync();
         await using var dst = File.Create(dest);
         var buffer = new byte[81920];
-        long read = 0;
+        long fileRead = 0;
         int n;
         while ((n = await src.ReadAsync(buffer)) > 0)
         {
             await dst.WriteAsync(buffer.AsMemory(0, n));
-            read += n;
-            if (total > 0)
+            fileRead += n;
+            if (totalBytes > 0)
             {
-                var pct = (int)Math.Clamp(read * 100 / total, 0, 100);
+                var pct = (int)Math.Clamp((doneBytes + fileRead) * 100 / totalBytes, 0, 100);
                 _progress.Value = pct;
-                _statusLabel.Text = $"Downloading... {read / 1024 / 1024} / {total / 1024 / 1024} MB";
+                var overallMb = (doneBytes + fileRead) / 1024 / 1024;
+                var totalMb   = Math.Max(1, totalBytes / 1024 / 1024);
+                var fileMb    = fileRead / 1024 / 1024;
+                var fileTot   = Math.Max(1, fileSize / 1024 / 1024);
+                _statusLabel.Text = $"{label}  {fileMb}/{fileTot} MB   (overall {overallMb}/{totalMb} MB)";
             }
         }
     }
@@ -362,7 +487,7 @@ internal sealed class LauncherForm : Form
     {
         var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         http.DefaultRequestHeaders.UserAgent.Add(
-            new ProductInfoHeaderValue("CowLauncher", "0.1"));
+            new ProductInfoHeaderValue("CowLauncher", "0.2"));
         http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
         return http;
