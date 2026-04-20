@@ -9,9 +9,9 @@ starts from zero.
 
 ## Stack
 
-- **Engine:** Godot 4.3+ (Vulkan renderer on desktop, GL compatibility on web if/when needed)
+- **Engine:** Godot 4.3+ — **native only, Vulkan forward+.** No web export. Linux + Windows desktop primary; mobile (APK / iOS) secondary target later.
 - **Language:** C# for sim core (ECS, systems, hot loops). GDScript for UI glue + editor tooling.
-- **Rendering:** Godot's built-in Vulkan pipeline — proper OIT, shadows, post-fx, GI without hand-rolling.
+- **Rendering:** Godot's built-in Vulkan pipeline — proper OIT, shadows, post-fx, GI, compute shaders. No compat-renderer restrictions.
 - **Threading:** real threads via `Task` / `Parallel.For` for cow brains + pathfinding + job board.
 - **Save:** Godot `Resource` serialization (binary or JSON) — no hand-rolled gzip+migrations.
 
@@ -23,11 +23,11 @@ Attempt 2 works (1000 cows @ 6 ms/tick, 104 fps on mobile) but is built on:
 - hand-rolled archetype ECS + hand-rolled tiered scheduler
 - 37-step save migration chain
 
-None of that is bad; all of it is a ceiling. Godot + C# lets us:
+None of that is bad; all of it is a ceiling. Godot + C# native lets us:
 - spend time on **game design** instead of engine plumbing
-- scale past 1k cows on real threads
-- use Vulkan-grade rendering / shadows / post-fx out of the box
-- export mobile natively (APK / iOS) instead of fighting browser perf
+- scale past 1k cows on real threads (Vulkan compute + proper `Task`-based workers)
+- use Vulkan-grade rendering / shadows / post-fx / GI out of the box
+- ship desktop binaries + mobile APK/iOS; no web = no browser perf wall, no WASM restrictions, no compatibility-renderer downgrade
 
 ## Ported from attempt 2
 
