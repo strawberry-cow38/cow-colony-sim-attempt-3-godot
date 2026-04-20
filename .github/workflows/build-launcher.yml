@@ -38,5 +38,6 @@ jobs:
           git push origin :refs/tags/launcher-latest || true
           gh release create launcher-latest \
             --title "Launcher (latest)" \
+            --prerelease \
             --notes "Rolling launcher build from main @ ${GITHUB_SHA:0:7}. Download CowLauncher.exe and replace your local copy." \
             CowLauncher.exe
