@@ -1,0 +1,31 @@
+name: CI tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore Sim
+        run: dotnet restore Sim/CowColonySim.Sim.csproj
+
+      - name: Restore Tests
+        run: dotnet restore Tests/CowColonySim.Tests.csproj
+
+      - name: Build Sim
+        run: dotnet build Sim/CowColonySim.Sim.csproj --configuration Release --no-restore
+
+      - name: Run Tests
+        run: dotnet test Tests/CowColonySim.Tests.csproj --configuration Release --no-restore --verbosity normal

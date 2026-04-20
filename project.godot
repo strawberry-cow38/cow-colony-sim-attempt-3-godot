@@ -17,6 +17,10 @@ config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 config/icon="res://icon.svg"
 boot_splash/show_image=false
 
+[autoload]
+
+SimHost="*res://scripts/core/SimHost.cs"
+
 [dotnet]
 
 project/assembly_name="CowColonySim"

@@ -7,11 +7,17 @@
     <RootNamespace>CowColonySim</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Fennecs" Version="0.5.*" />
+    <ProjectReference Include="Sim/CowColonySim.Sim.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="launcher/**" />
     <None Remove="launcher/**" />
     <EmbeddedResource Remove="launcher/**" />
+    <Compile Remove="Sim/**" />
+    <None Remove="Sim/**" />
+    <EmbeddedResource Remove="Sim/**" />
+    <Compile Remove="Tests/**" />
+    <None Remove="Tests/**" />
+    <EmbeddedResource Remove="Tests/**" />
   </ItemGroup>
 </Project>
