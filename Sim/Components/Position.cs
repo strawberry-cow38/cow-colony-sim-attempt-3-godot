@@ -1,3 +1,3 @@
 namespace CowColonySim.Sim.Components;
 
-public record struct Position(int X, int Y);
+public record struct Position(float X, float Y, float Z);

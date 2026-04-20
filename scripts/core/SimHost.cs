@@ -3,6 +3,7 @@ using fennecs;
 using CowColonySim.Sim;
 using CowColonySim.Sim.Components;
 using CowColonySim.Sim.Grid;
+using CowColonySim.Sim.Pathfinding;
 using CowColonySim.Sim.Systems;
 
 namespace CowColonySim;
@@ -13,6 +14,8 @@ public partial class SimHost : Node
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
 
+	private readonly Random _rng = new(0xC0FFEE);
+
 	public SimHost()
 	{
 		Loop = new SimLoop(Step);
@@ -20,9 +23,9 @@ public partial class SimHost : Node
 
 	public override void _Ready()
 	{
-		World.Spawn().Add(new Position(0, 0));
 		SeedDemoPyramid();
 		SeedDemoColony();
+		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
 		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
 	}
@@ -34,7 +37,9 @@ public partial class SimHost : Node
 
 	private void Step(int tick)
 	{
-		DemoWanderSystem.Step(World);
+		WanderSystem.Step(World, Tiles, _rng);
+		PathPlanSystem.Step(World, Tiles);
+		PathFollowSystem.Step(World, (float)SimConstants.SimDt);
 		if (tick % SimConstants.SimHz == 0) ChunkTierSystem.Step(World, Tiles);
 	}
 
@@ -45,6 +50,21 @@ public partial class SimHost : Node
 			new TilePos(100, 32, 100),
 			ChunkState.Ambient));
 		World.Spawn().Add(new LiveAnchor(new TilePos(0, 8, 0), 24));
+	}
+
+	private void SeedColonists()
+	{
+		TilePos[] spawnTiles = {
+			new(-1, 8, -1),
+			new( 0, 8,  0),
+			new( 1, 8,  1),
+		};
+		foreach (var tile in spawnTiles)
+		{
+			var cow = World.Spawn();
+			cow.Add(new Colonist());
+			cow.Add(TileMath.FeetOfTile(tile));
+		}
 	}
 
 	private void SeedDemoPyramid()
