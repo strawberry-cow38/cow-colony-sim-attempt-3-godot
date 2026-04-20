@@ -15,6 +15,7 @@ config/description="3D cow colony sim — attempt 3, Godot 4 + C# rewrite of the
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 config/icon="res://icon.svg"
+boot_splash/show_image=false
 
 [dotnet]
 
