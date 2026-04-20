@@ -11,7 +11,8 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
-	public const int WorldSize = 200;
+	public const int WorldSize = 800;
+	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 
 	public World World { get; } = new();
@@ -52,10 +53,10 @@ public partial class SimHost : Node
 
 	private void SeedColonyClaim()
 	{
-		var half = WorldSize / 2;
+		var r = ColonyClaimRadius;
 		World.Spawn().Add(new ClaimedRegion(
-			new TilePos(-half, 0, -half),
-			new TilePos(half - 1, 32, half - 1),
+			new TilePos(-r, 0, -r),
+			new TilePos(r - 1, 32, r - 1),
 			ChunkState.Live));
 	}
 

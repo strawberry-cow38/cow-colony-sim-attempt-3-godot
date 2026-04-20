@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3 uid="uid://b0cowcolsimmain"]
+[gd_scene load_steps=8 format=3 uid="uid://b0cowcolsimmain"]
 
 [ext_resource type="Script" path="res://scripts/core/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://scripts/render/GridRenderer.cs" id="2_grid"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/render/ColonistRenderer.cs" id="4_colonist"]
 [ext_resource type="Script" path="res://scripts/ui/SettingsMenu.cs" id="5_settings"]
 [ext_resource type="Script" path="res://scripts/render/DayNightRenderer.cs" id="6_daynight"]
+[ext_resource type="Script" path="res://scripts/ui/FpsCounter.cs" id="7_fps"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -36,3 +37,6 @@ script = ExtResource("6_daynight")
 SunPath = NodePath("../Sun")
 MoonPath = NodePath("../Moon")
 WorldEnvPath = NodePath("../WorldEnvironment")
+
+[node name="FpsCounter" type="CanvasLayer" parent="."]
+script = ExtResource("7_fps")
