@@ -14,8 +14,14 @@ public static class TileAtlas
 {
     public const int Cols = 4;
     public const int Rows = 4;
+    public const int AtlasPx = 2048;
     public const float CellU = 1f / Cols;
     public const float CellV = 1f / Rows;
+
+    // Inset UVs by this many atlas pixels to avoid mipmap bleeding between
+    // adjacent cells. 8px roughly matches a mip level 3 footprint.
+    private const float InsetPx = 8f;
+    private const float InsetU = InsetPx / AtlasPx;
 
     private static readonly int[] GrassCells = { 0, 1, 2, 3, 4, 5, 6 };
     private const int DirtCell = 10;
@@ -45,9 +51,11 @@ public static class TileAtlas
     {
         var col = cell % Cols;
         var row = cell / Cols;
-        var u0 = col * CellU;
-        var v0 = row * CellV;
-        return (u0, v0, u0 + CellU, v0 + CellV);
+        var u0 = col * CellU + InsetU;
+        var v0 = row * CellV + InsetU;
+        var u1 = (col + 1) * CellU - InsetU;
+        var v1 = (row + 1) * CellV - InsetU;
+        return (u0, v0, u1, v1);
     }
 
     private static int Hash(int x, int z)
