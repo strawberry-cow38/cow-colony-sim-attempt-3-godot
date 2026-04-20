@@ -2,7 +2,7 @@
 .godot/
 .import/
 export.cfg
-export_presets.cfg
+# export_presets.cfg is committed so CI can build release artifacts
 
 # Imports (regenerated from source assets)
 *.import

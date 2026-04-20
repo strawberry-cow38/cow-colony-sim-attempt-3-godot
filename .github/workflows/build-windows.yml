@@ -1,0 +1,115 @@
+name: Build Windows Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "launcher/**"
+      - "docs/**"
+      - "**.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: 4.6.2
+  DOTNET_VERSION: "8.0.x"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache Godot engine + templates
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-mono-linux
+
+      - name: Download Godot 4 (mono)
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/godot-bin
+          cd ~/godot-bin
+          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          mv "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64" godot
+          chmod +x godot
+
+      - name: Download export templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.local/share/godot/export_templates
+          cd /tmp
+          wget -q "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz"
+          mv templates "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono"
+
+      - name: Put Godot on PATH
+        run: echo "$HOME/godot-bin" >> $GITHUB_PATH
+
+      - name: Restore .NET packages
+        run: dotnet restore
+
+      - name: Godot --import
+        run: |
+          godot --headless --import --quit || true
+          godot --headless --import --quit
+
+      - name: Build C# assembly
+        run: dotnet build -c ExportRelease --no-restore
+
+      - name: Export Windows release
+        run: |
+          set -euo pipefail
+          mkdir -p build/windows
+          godot --headless --export-release "Windows Desktop" "$PWD/build/windows/CowColonySim.exe"
+          ls -la build/windows/
+
+      - name: Derive build metadata
+        id: meta
+        run: |
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          BUILD_TAG="build-$(date -u +%Y%m%d-%H%M%S)"
+          SHORT_SHA=${GITHUB_SHA:0:7}
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+          echo "build_tag=$BUILD_TAG"   >> $GITHUB_OUTPUT
+          echo "short_sha=$SHORT_SHA"    >> $GITHUB_OUTPUT
+
+      - name: Write version.txt
+        run: |
+          cat > build/windows/version.txt <<EOF
+          tag=${{ steps.meta.outputs.build_tag }}
+          date=${{ steps.meta.outputs.build_date }}
+          sha=${{ github.sha }}
+          EOF
+          cat build/windows/version.txt
+
+      - name: Zip Windows build
+        run: |
+          cd build/windows
+          zip -r -q "$GITHUB_WORKSPACE/CowColonySim-windows-x86_64.zip" .
+          ls -la "$GITHUB_WORKSPACE/CowColonySim-windows-x86_64.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.meta.outputs.build_tag }}" \
+            --title "${{ steps.meta.outputs.build_tag }}" \
+            --notes "Automated build from \`${{ steps.meta.outputs.short_sha }}\` at ${{ steps.meta.outputs.build_date }}." \
+            CowColonySim-windows-x86_64.zip
