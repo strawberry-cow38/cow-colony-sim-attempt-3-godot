@@ -95,7 +95,7 @@ public sealed partial class GridRenderer : Node3D
             if (!_slots.TryGetValue(key, out var slot)) continue;
             slot.InFlight = false;
             slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
-            slot.UploadedRevision = result?.Revision ?? slot.RequestedRevision;
+            slot.UploadedRevision = slot.RequestedRevision;
             slot.CurrentLod = result?.LodLevel ?? lod;
         }
         while (_completedGroup.TryDequeue(out var pack))
@@ -105,7 +105,7 @@ public sealed partial class GridRenderer : Node3D
             if (!table.TryGetValue(key, out var slot)) continue;
             slot.InFlight = false;
             slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
-            slot.UploadedRevision = result?.Revision ?? slot.RequestedRevision;
+            slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = result?.LodLevel ?? lod;
         }
@@ -127,16 +127,38 @@ public sealed partial class GridRenderer : Node3D
             }
             slot.MeshInstance.Visible = true;
             if (slot.InFlight) continue;
-            if (slot.CurrentLod == tier && slot.UploadedRevision == chunk.Revision) continue;
+
+            var nPosX = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X + 1, chunkKey.Y, chunkKey.Z));
+            var nNegX = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X - 1, chunkKey.Y, chunkKey.Z));
+            var nPosZ = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X, chunkKey.Y, chunkKey.Z + 1));
+            var nNegZ = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X, chunkKey.Y, chunkKey.Z - 1));
+            long combinedRev = chunk.Revision;
+            if (tier >= 1)
+            {
+                combinedRev += nPosX?.Revision ?? 0;
+                combinedRev += nNegX?.Revision ?? 0;
+                combinedRev += nPosZ?.Revision ?? 0;
+                combinedRev += nNegZ?.Revision ?? 0;
+            }
+            if (slot.CurrentLod == tier && slot.UploadedRevision == combinedRev) continue;
 
             var snap = chunk.Snapshot();
+            ChunkSnapshot? snapPosX = tier >= 1 ? nPosX?.Snapshot() : null;
+            ChunkSnapshot? snapNegX = tier >= 1 ? nNegX?.Snapshot() : null;
+            ChunkSnapshot? snapPosZ = tier >= 1 ? nPosZ?.Snapshot() : null;
+            ChunkSnapshot? snapNegZ = tier >= 1 ? nNegZ?.Snapshot() : null;
             slot.InFlight = true;
-            slot.RequestedRevision = snap.Revision;
+            slot.RequestedRevision = combinedRev;
             var key = chunkKey;
             var lod = tier;
             Task.Run(() =>
             {
-                var r = _mesher.BuildMeshData(snap, key, lod);
+                MeshBuildResult? r;
+                if (lod == 0)
+                    r = _mesher.BuildMeshData(snap, key, lod);
+                else
+                    r = _mesher.BuildChunkHeightmapWithBorders(snap, key, step: 1,
+                        snapPosX, snapNegX, snapPosZ, snapNegZ);
                 _completedChunk.Enqueue((key, r, lod));
             });
         }
@@ -172,20 +194,20 @@ public sealed partial class GridRenderer : Node3D
                 var lz = ck.Z - groupKey.Z;
                 unchecked
                 {
-                    maskHash = maskHash * 31 + (lx * groupSize + lz) + 1;
+                    maskHash = maskHash * 31 + ((lx * groupSize + lz) * 1024 + ck.Y + 1);
                     revHash += chunk.Revision;
                 }
             }
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
 
-            var snapshots = new ChunkSnapshot?[groupSize, groupSize];
+            var entries = new List<NaiveChunkMesher.GroupChunkEntry>(chunkKeys.Count);
             foreach (var ck in chunkKeys)
             {
                 var chunk = _simHost!.Tiles.GetChunkOrNull(ck);
                 if (chunk == null) continue;
                 var lx = ck.X - groupKey.X;
                 var lz = ck.Z - groupKey.Z;
-                snapshots[lx, lz] = chunk.Snapshot();
+                entries.Add(new NaiveChunkMesher.GroupChunkEntry(lx, lz, ck.Y, chunk.Snapshot()));
             }
 
             slot.InFlight = true;
@@ -197,7 +219,7 @@ public sealed partial class GridRenderer : Node3D
             var stepCaptured = step;
             Task.Run(() =>
             {
-                var r = _mesher.BuildGroupMesh(snapshots, key, size, stepCaptured, lodCaptured);
+                var r = _mesher.BuildGroupMesh(entries, key, size, stepCaptured, lodCaptured);
                 _completedGroup.Enqueue((key, size, r, lodCaptured, maskHashCaptured));
             });
         }

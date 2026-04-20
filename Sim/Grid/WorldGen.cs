@@ -5,7 +5,7 @@ namespace CowColonySim.Sim.Grid;
 public static class WorldGen
 {
     public const int DefaultMinHeight = 1;
-    public const int DefaultMaxHeight = 6;
+    public const int DefaultMaxHeight = 51;
     public const float DefaultFrequency = 0.02f;
 
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
