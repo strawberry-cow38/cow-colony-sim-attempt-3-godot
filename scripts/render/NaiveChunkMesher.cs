@@ -234,6 +234,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
         return mesh;
     }
 
+    private const int SkirtDepthTiles = 6;
+
     private static MeshBuildResult? BuildHeightmapMesh(
         int[,] colHeight, TileKind[,] colKind, int sizeX, int sizeZ,
         int baseWx, int baseWz, int step,
@@ -285,7 +287,6 @@ public sealed class NaiveChunkMesher : IChunkMesher
             var oyTop = (hi + 1) * th;
 
             var topCell = TileAtlas.CellForTop(kind, baseWx + lx, baseWz + lz);
-            var sideCell = TileAtlas.CellForSide(kind);
             var (u0, v0, u1, v1) = TileAtlas.CellUV(topCell);
 
             var baseIndex = verts.Count;
@@ -300,24 +301,12 @@ public sealed class NaiveChunkMesher : IChunkMesher
             for (var k = 0; k < 4; k++) { normals.Add(up); colors.Add(Godot.Colors.White); }
             indices.Add(baseIndex); indices.Add(baseIndex + 1); indices.Add(baseIndex + 2);
             indices.Add(baseIndex); indices.Add(baseIndex + 2); indices.Add(baseIndex + 3);
-
-            EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
-                ox, oz, wSpan, th, dirX: 1, dirZ: 0,
-                bPosX, bNegX, bPosZ, bNegZ, step);
-            EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
-                ox, oz, wSpan, th, dirX: -1, dirZ: 0,
-                bPosX, bNegX, bPosZ, bNegZ, step);
-            EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
-                ox, oz, wSpan, th, dirX: 0, dirZ: 1,
-                bPosX, bNegX, bPosZ, bNegZ, step);
-            EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
-                ox, oz, wSpan, th, dirX: 0, dirZ: -1,
-                bPosX, bNegX, bPosZ, bNegZ, step);
         }
+
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 1,  dirZ: 0,  bPosX, bNegX, bPosZ, bNegZ);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: -1, dirZ: 0,  bPosX, bNegX, bPosZ, bNegZ);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 0,  dirZ: 1,  bPosX, bNegX, bPosZ, bNegZ);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 0,  dirZ: -1, bPosX, bNegX, bPosZ, bNegZ);
 
         if (indices.Count == 0) return null;
 
@@ -331,88 +320,138 @@ public sealed class NaiveChunkMesher : IChunkMesher
         };
     }
 
-    private static void EmitCliffSide(
+    private static void EmitGreedyCliffDir(
         List<Vector3> verts,
         List<Vector3> normals,
         List<Color> colors,
         List<Vector2> uvs,
         List<int> indices,
-        int[,] dsHeight, int cellsX, int cellsZ,
-        int cx, int cz, int hi, int sideCell,
-        float ox, float oz, float wSpan, float th,
+        int[,] dsHeight, TileKind[,] dsKind,
+        int cellsX, int cellsZ, float th, float tw, int step,
         int dirX, int dirZ,
+        int[]? bPosX, int[]? bNegX, int[]? bPosZ, int[]? bNegZ)
+    {
+        var alongZ = dirX != 0;
+        var outerCount = alongZ ? cellsX : cellsZ;
+        var innerCount = alongZ ? cellsZ : cellsX;
+
+        for (var outer = 0; outer < outerCount; outer++)
+        {
+            var inner = 0;
+            while (inner < innerCount)
+            {
+                var cx = alongZ ? outer : inner;
+                var cz = alongZ ? inner : outer;
+                var hi = dsHeight[cx, cz];
+                if (hi < 0) { inner++; continue; }
+
+                var (hn, hasN) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx, cz, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
+                var emitCliff = hasN && hn < hi;
+                var emitSkirt = !hasN;
+                if (!emitCliff && !emitSkirt) { inner++; continue; }
+
+                var kind = dsKind[cx, cz];
+                var runStart = inner;
+                var innerEnd = inner + 1;
+                while (innerEnd < innerCount)
+                {
+                    var cx2 = alongZ ? outer : innerEnd;
+                    var cz2 = alongZ ? innerEnd : outer;
+                    if (dsHeight[cx2, cz2] != hi) break;
+                    if (dsKind[cx2, cz2] != kind) break;
+                    var (hn2, hasN2) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx2, cz2, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
+                    var cliff2 = hasN2 && hn2 < hi;
+                    var skirt2 = !hasN2;
+                    if (cliff2 != emitCliff || skirt2 != emitSkirt) break;
+                    if (emitCliff && hn2 != hn) break;
+                    innerEnd++;
+                }
+
+                var runLen = innerEnd - runStart;
+                var yTop = (hi + 1) * th;
+                var yBot = emitCliff
+                    ? (hn + 1) * th
+                    : Mathf.Max(0f, (hi + 1 - SkirtDepthTiles) * th);
+
+                var ox = (alongZ ? outer : runStart) * step * tw;
+                var oz = (alongZ ? runStart : outer) * step * tw;
+                var spanX = alongZ ? step * tw : runLen * step * tw;
+                var spanZ = alongZ ? runLen * step * tw : step * tw;
+
+                var sideCell = TileAtlas.CellForSide(kind);
+                var (u0, v0, u1, v1) = TileAtlas.CellUV(sideCell);
+
+                Vector3 p0, p1, p2, p3;
+                Vector3 normal;
+                if (dirX == 1)
+                {
+                    normal = new Vector3(1, 0, 0);
+                    p0 = new Vector3(ox + spanX, yBot, oz);
+                    p1 = new Vector3(ox + spanX, yBot, oz + spanZ);
+                    p2 = new Vector3(ox + spanX, yTop, oz + spanZ);
+                    p3 = new Vector3(ox + spanX, yTop, oz);
+                }
+                else if (dirX == -1)
+                {
+                    normal = new Vector3(-1, 0, 0);
+                    p0 = new Vector3(ox, yBot, oz + spanZ);
+                    p1 = new Vector3(ox, yBot, oz);
+                    p2 = new Vector3(ox, yTop, oz);
+                    p3 = new Vector3(ox, yTop, oz + spanZ);
+                }
+                else if (dirZ == 1)
+                {
+                    normal = new Vector3(0, 0, 1);
+                    p0 = new Vector3(ox + spanX, yBot, oz + spanZ);
+                    p1 = new Vector3(ox,         yBot, oz + spanZ);
+                    p2 = new Vector3(ox,         yTop, oz + spanZ);
+                    p3 = new Vector3(ox + spanX, yTop, oz + spanZ);
+                }
+                else
+                {
+                    normal = new Vector3(0, 0, -1);
+                    p0 = new Vector3(ox,         yBot, oz);
+                    p1 = new Vector3(ox + spanX, yBot, oz);
+                    p2 = new Vector3(ox + spanX, yTop, oz);
+                    p3 = new Vector3(ox,         yTop, oz);
+                }
+
+                var baseIndex = verts.Count;
+                verts.Add(p0); verts.Add(p1); verts.Add(p2); verts.Add(p3);
+                normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
+                colors.Add(Godot.Colors.White); colors.Add(Godot.Colors.White);
+                colors.Add(Godot.Colors.White); colors.Add(Godot.Colors.White);
+                uvs.Add(new Vector2(u0, v1));
+                uvs.Add(new Vector2(u1, v1));
+                uvs.Add(new Vector2(u1, v0));
+                uvs.Add(new Vector2(u0, v0));
+                indices.Add(baseIndex); indices.Add(baseIndex + 1); indices.Add(baseIndex + 2);
+                indices.Add(baseIndex); indices.Add(baseIndex + 2); indices.Add(baseIndex + 3);
+
+                inner = innerEnd;
+            }
+        }
+    }
+
+    private static (int hn, bool hasNeighbor) QueryNeighbor(
+        int[,] dsHeight, int cellsX, int cellsZ,
+        int cx, int cz, int dirX, int dirZ,
         int[]? bPosX, int[]? bNegX, int[]? bPosZ, int[]? bNegZ, int step)
     {
         var nx = cx + dirX;
         var nz = cz + dirZ;
-        int hn;
-        if ((uint)nx >= cellsX || (uint)nz >= cellsZ)
+        if ((uint)nx < cellsX && (uint)nz < cellsZ)
         {
-            int[]? border = null;
-            var idx = 0;
-            if (dirX == 1) { border = bPosX; idx = cz * step; }
-            else if (dirX == -1) { border = bNegX; idx = cz * step; }
-            else if (dirZ == 1) { border = bPosZ; idx = cx * step; }
-            else if (dirZ == -1) { border = bNegZ; idx = cx * step; }
-            if (border == null || (uint)idx >= border.Length) return;
-            hn = border[idx];
+            return (dsHeight[nx, nz], true);
         }
-        else
-        {
-            hn = dsHeight[nx, nz];
-        }
-        if (hn >= hi) return;
-
-        var yTop = (hi + 1) * th;
-        var yBot = (hn + 1) * th;
-        var (u0, v0, u1, v1) = TileAtlas.CellUV(sideCell);
-
-        Vector3 p0, p1, p2, p3;
-        Vector3 normal;
-        if (dirX == 1)
-        {
-            normal = new Vector3(1, 0, 0);
-            p0 = new Vector3(ox + wSpan, yBot, oz);
-            p1 = new Vector3(ox + wSpan, yBot, oz + wSpan);
-            p2 = new Vector3(ox + wSpan, yTop, oz + wSpan);
-            p3 = new Vector3(ox + wSpan, yTop, oz);
-        }
-        else if (dirX == -1)
-        {
-            normal = new Vector3(-1, 0, 0);
-            p0 = new Vector3(ox, yBot, oz + wSpan);
-            p1 = new Vector3(ox, yBot, oz);
-            p2 = new Vector3(ox, yTop, oz);
-            p3 = new Vector3(ox, yTop, oz + wSpan);
-        }
-        else if (dirZ == 1)
-        {
-            normal = new Vector3(0, 0, 1);
-            p0 = new Vector3(ox + wSpan, yBot, oz + wSpan);
-            p1 = new Vector3(ox,         yBot, oz + wSpan);
-            p2 = new Vector3(ox,         yTop, oz + wSpan);
-            p3 = new Vector3(ox + wSpan, yTop, oz + wSpan);
-        }
-        else
-        {
-            normal = new Vector3(0, 0, -1);
-            p0 = new Vector3(ox,         yBot, oz);
-            p1 = new Vector3(ox + wSpan, yBot, oz);
-            p2 = new Vector3(ox + wSpan, yTop, oz);
-            p3 = new Vector3(ox,         yTop, oz);
-        }
-
-        var baseIndex = verts.Count;
-        verts.Add(p0); verts.Add(p1); verts.Add(p2); verts.Add(p3);
-        normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
-        colors.Add(Godot.Colors.White); colors.Add(Godot.Colors.White);
-        colors.Add(Godot.Colors.White); colors.Add(Godot.Colors.White);
-        uvs.Add(new Vector2(u0, v1));
-        uvs.Add(new Vector2(u1, v1));
-        uvs.Add(new Vector2(u1, v0));
-        uvs.Add(new Vector2(u0, v0));
-        indices.Add(baseIndex); indices.Add(baseIndex + 1); indices.Add(baseIndex + 2);
-        indices.Add(baseIndex); indices.Add(baseIndex + 2); indices.Add(baseIndex + 3);
+        int[]? border = null;
+        var idx = 0;
+        if (dirX == 1) { border = bPosX; idx = cz * step; }
+        else if (dirX == -1) { border = bNegX; idx = cz * step; }
+        else if (dirZ == 1) { border = bPosZ; idx = cx * step; }
+        else if (dirZ == -1) { border = bNegZ; idx = cx * step; }
+        if (border == null || (uint)idx >= border.Length) return (-2, false);
+        return (border[idx], true);
     }
 
     private static void EmitFace(

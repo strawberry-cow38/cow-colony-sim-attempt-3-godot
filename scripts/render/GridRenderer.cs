@@ -14,7 +14,7 @@ public sealed partial class GridRenderer : Node3D
     private const int Tier0Range = 2;    // L0: per-chunk voxel
     private const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
     private const int Tier3Range = 32;   // L3: G4 group (4x4 chunks) heightmap step=4
-    // else L4: G8 group (8x8 chunks) heightmap step=8
+    // else L4: G8 group (8x8 chunks) heightmap step=16
 
     private const int Group4 = 4;
     private const int Group8 = 8;
@@ -93,7 +93,7 @@ public sealed partial class GridRenderer : Node3D
 
         Profiler.Begin("Groups");
         UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4);
-        UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 8);
+        UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 16);
         Profiler.End("Groups");
 
         Profiler.SetCounter("L0+L1 slots", _slots.Count);
