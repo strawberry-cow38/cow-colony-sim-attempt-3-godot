@@ -14,6 +14,10 @@ public sealed partial class GridRenderer : Node3D
     private const int Lod1Range = 16;  // ≤16 chunks: heightmap 1:1
     // else: heightmap 4:1 downsample.
 
+    // Radial draw-distance cap (chebyshev chunks). Chunks outside this
+    // radius have their MeshInstance hidden and skip meshing entirely.
+    public static int MaxChunkDistance { get; set; } = 32;
+
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
     private readonly ConcurrentQueue<(TilePos ChunkKey, MeshBuildResult? Result, int LodRequested)> _completed = new();
     private readonly IChunkMesher _mesher = new NaiveChunkMesher();
@@ -63,11 +67,19 @@ public sealed partial class GridRenderer : Node3D
                 AddChild(slot.MeshInstance);
                 _slots[chunkKey] = slot;
             }
-            if (slot.InFlight) continue;
-
             var dx = System.Math.Abs(chunkKey.X - camChunkX);
             var dz = System.Math.Abs(chunkKey.Z - camChunkZ);
             var d = System.Math.Max(dx, dz);
+
+            if (d > MaxChunkDistance)
+            {
+                slot.MeshInstance.Visible = false;
+                continue;
+            }
+            slot.MeshInstance.Visible = true;
+
+            if (slot.InFlight) continue;
+
             var desiredLod = d <= Lod0Range ? 0 : d <= Lod1Range ? 1 : 2;
 
             var needsRemesh = slot.CurrentLod != desiredLod || chunk.Revision != slot.UploadedRevision;

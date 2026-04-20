@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Godot;
+using CowColonySim.Render;
 
 namespace CowColonySim.UI;
 
@@ -39,6 +40,8 @@ public sealed partial class SettingsMenu : CanvasLayer
     private Button _checkUpdateButton = null!;
     private Label _updateStatus = null!;
     private Label _currentResolutionLabel = null!;
+    private HSlider _renderDistanceSlider = null!;
+    private Label _renderDistanceLabel = null!;
 
     private int _resolutionIndex = 2;
     private int _windowModeIndex = 0;
@@ -46,6 +49,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private bool _taaEnabled = true;
     private bool _fxaaEnabled = true;
     private bool _vsyncEnabled = false;
+    private int _renderDistance = 32;
 
     public override void _Ready()
     {
@@ -53,6 +57,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         Load();
         ApplyWindow();
         ApplyRendering();
+        ApplyWorld();
         BuildUi();
         _panel.Visible = false;
     }
@@ -72,7 +77,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _panel = new Panel
         {
             AnchorLeft = 0.5f, AnchorTop = 0.5f, AnchorRight = 0.5f, AnchorBottom = 0.5f,
-            OffsetLeft = -240, OffsetTop = -260, OffsetRight = 240, OffsetBottom = 260,
+            OffsetLeft = -240, OffsetTop = -320, OffsetRight = 240, OffsetBottom = 320,
         };
         AddChild(_panel);
 
@@ -125,6 +130,24 @@ public sealed partial class SettingsMenu : CanvasLayer
         vb.AddChild(_vsyncCheck);
 
         vb.AddChild(new HSeparator());
+        vb.AddChild(new Label { Text = "World" });
+        _renderDistanceLabel = new Label { Text = $"Render Distance: {_renderDistance} chunks" };
+        vb.AddChild(_renderDistanceLabel);
+        _renderDistanceSlider = new HSlider
+        {
+            MinValue = 4, MaxValue = 64, Step = 1, Value = _renderDistance,
+            CustomMinimumSize = new Vector2(0, 24),
+        };
+        _renderDistanceSlider.ValueChanged += v =>
+        {
+            _renderDistance = (int)v;
+            _renderDistanceLabel.Text = $"Render Distance: {_renderDistance} chunks";
+            ApplyWorld();
+            Save();
+        };
+        vb.AddChild(_renderDistanceSlider);
+
+        vb.AddChild(new HSeparator());
         _checkUpdateButton = new Button { Text = "Check for Updates" };
         _checkUpdateButton.Pressed += OnCheckUpdatePressed;
         vb.AddChild(_checkUpdateButton);
@@ -175,6 +198,11 @@ public sealed partial class SettingsMenu : CanvasLayer
         DisplayServer.WindowSetVsyncMode(_vsyncEnabled ? DisplayServer.VSyncMode.Enabled : DisplayServer.VSyncMode.Disabled);
     }
 
+    private void ApplyWorld()
+    {
+        GridRenderer.MaxChunkDistance = _renderDistance;
+    }
+
     private void Load()
     {
         var cfg = new ConfigFile();
@@ -185,6 +213,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _taaEnabled = (bool)cfg.GetValue("render", "taa", true);
         _fxaaEnabled = (bool)cfg.GetValue("render", "fxaa", true);
         _vsyncEnabled = (bool)cfg.GetValue("render", "vsync", false);
+        _renderDistance = Mathf.Clamp((int)cfg.GetValue("world", "render_distance", 32), 4, 64);
     }
 
     private void Save()
@@ -196,6 +225,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         cfg.SetValue("render", "taa", _taaEnabled);
         cfg.SetValue("render", "fxaa", _fxaaEnabled);
         cfg.SetValue("render", "vsync", _vsyncEnabled);
+        cfg.SetValue("world", "render_distance", _renderDistance);
         cfg.Save(ConfigPath);
     }
 
