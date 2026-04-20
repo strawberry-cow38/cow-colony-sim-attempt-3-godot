@@ -13,5 +13,8 @@ public static class SimConstants
     public const int SimHz = 60;
     public const double SimDt = 1.0 / SimHz;
 
+    public const float TileSizeMeters = 1.5f;
+    public const int ChunkSize = 16;
+
     public static readonly SimSpeed[] SpeedSteps = { SimSpeed.X1, SimSpeed.X2, SimSpeed.X3, SimSpeed.X6 };
 }
