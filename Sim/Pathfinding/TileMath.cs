@@ -7,17 +7,19 @@ public static class TileMath
 {
     public static TilePos TileAt(Position p)
     {
-        var t = SimConstants.TileSizeMeters;
+        var w = SimConstants.TileWidthMeters;
+        var h = SimConstants.TileHeightMeters;
         return new TilePos(
-            (int)MathF.Floor(p.X / t),
-            (int)MathF.Floor(p.Y / t),
-            (int)MathF.Floor(p.Z / t));
+            (int)MathF.Floor(p.X / w),
+            (int)MathF.Floor(p.Y / h),
+            (int)MathF.Floor(p.Z / w));
     }
 
     public static Position FeetOfTile(TilePos pos)
     {
-        var t = SimConstants.TileSizeMeters;
-        return new Position(pos.X * t + t * 0.5f, pos.Y * t, pos.Z * t + t * 0.5f);
+        var w = SimConstants.TileWidthMeters;
+        var h = SimConstants.TileHeightMeters;
+        return new Position(pos.X * w + w * 0.5f, pos.Y * h, pos.Z * w + w * 0.5f);
     }
 
     public static float HorizontalDistance(Position a, Position b)

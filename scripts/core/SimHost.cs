@@ -11,11 +11,14 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
+	public const int WorldSize = 200;
+	public const int WorldSeed = 0xC0FFEE;
+
 	public World World { get; } = new();
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
 
-	private readonly Random _rng = new(0xC0FFEE);
+	private readonly Random _rng = new(WorldSeed);
 
 	public SimHost()
 	{
@@ -24,8 +27,8 @@ public partial class SimHost : Node
 
 	public override void _Ready()
 	{
-		SeedDemoPyramid();
-		SeedDemoColony();
+		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize);
+		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
 		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
@@ -44,41 +47,24 @@ public partial class SimHost : Node
 		if (tick % SimConstants.SimHz == 0) ChunkTierSystem.Step(World, Tiles);
 	}
 
-	private void SeedDemoColony()
+	private void SeedColonyClaim()
 	{
+		var half = WorldSize / 2;
 		World.Spawn().Add(new ClaimedRegion(
-			new TilePos(-100, 0, -100),
-			new TilePos(100, 32, 100),
-			ChunkState.Ambient));
-		World.Spawn().Add(new LiveAnchor(new TilePos(0, 8, 0), 24));
+			new TilePos(-half, 0, -half),
+			new TilePos(half - 1, 32, half - 1),
+			ChunkState.Live));
 	}
 
 	private void SeedColonists()
 	{
-		TilePos[] spawnTiles = {
-			new(-1, 8, -1),
-			new( 0, 8,  0),
-			new( 1, 8,  1),
-		};
-		foreach (var tile in spawnTiles)
+		(int x, int z)[] spawnXZ = { (-1, -1), (0, 0), (1, 1) };
+		foreach (var (x, z) in spawnXZ)
 		{
+			var y = WorldGen.SurfaceY(Tiles, x, z);
 			var cow = World.Spawn();
 			cow.Add(new Colonist());
-			cow.Add(TileMath.FeetOfTile(tile));
-		}
-	}
-
-	private void SeedDemoPyramid()
-	{
-		const int steps = 8;
-		for (var step = 0; step < steps; step++)
-		{
-			var half = steps - step;
-			for (var x = -half; x <= half; x++)
-			for (var z = -half; z <= half; z++)
-			{
-				Tiles.Set(new TilePos(x, step, z), new Tile(step == steps - 1 ? TileKind.Floor : TileKind.Solid));
-			}
+			cow.Add(TileMath.FeetOfTile(new TilePos(x, y, z)));
 		}
 	}
 }

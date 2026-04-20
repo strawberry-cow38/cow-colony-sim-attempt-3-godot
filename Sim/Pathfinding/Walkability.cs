@@ -9,11 +9,22 @@ public static class Walkability
     public static bool IsStandable(TileWorld world, TilePos pos)
     {
         if (!world.Get(pos).IsEmpty) return false;
-        return IsSupport(world.Get(pos.Offset(0, -1, 0)));
+        if (!IsSupport(world.Get(pos.Offset(0, -1, 0)))) return false;
+        for (var dy = 1; dy < SimConstants.HeadroomTiles; dy++)
+        {
+            if (!world.Get(pos.Offset(0, dy, 0)).IsEmpty) return false;
+        }
+        return true;
     }
 
     public static bool HasHeadroom(TileWorld world, TilePos pos)
-        => world.Get(pos.Offset(0, 1, 0)).IsEmpty;
+    {
+        for (var dy = 1; dy <= SimConstants.HeadroomTiles; dy++)
+        {
+            if (!world.Get(pos.Offset(0, dy, 0)).IsEmpty) return false;
+        }
+        return true;
+    }
 
     private static readonly (int dx, int dz)[] Horiz =
     {

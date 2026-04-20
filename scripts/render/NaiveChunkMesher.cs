@@ -24,7 +24,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
         var colors = new List<Color>();
         var indices = new List<int>();
 
-        var t = TileCoord.Tile;
+        var tw = TileCoord.TileW;
+        var th = TileCoord.TileH;
         for (var ly = 0; ly < Chunk.Size; ly++)
         for (var lz = 0; lz < Chunk.Size; lz++)
         for (var lx = 0; lx < Chunk.Size; lx++)
@@ -32,9 +33,9 @@ public sealed class NaiveChunkMesher : IChunkMesher
             var tile = snapshot[lx, ly, lz];
             if (tile.IsEmpty) continue;
             var color = TilePalette.ColorOf(tile.Kind);
-            var ox = lx * t;
-            var oy = ly * t;
-            var oz = lz * t;
+            var ox = lx * tw;
+            var oy = ly * th;
+            var oz = lz * tw;
 
             foreach (var (dx, dy, dz, n) in Faces)
             {
@@ -44,7 +45,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 var neighborInside = (uint)nx < Chunk.Size && (uint)ny < Chunk.Size && (uint)nz < Chunk.Size;
                 if (neighborInside && !snapshot[nx, ny, nz].IsEmpty) continue;
 
-                EmitFace(verts, normals, colors, indices, ox, oy, oz, t, n, color);
+                EmitFace(verts, normals, colors, indices, ox, oy, oz, tw, th, n, color);
             }
         }
 
@@ -67,17 +68,17 @@ public sealed class NaiveChunkMesher : IChunkMesher
         List<Vector3> normals,
         List<Color> colors,
         List<int> indices,
-        float ox, float oy, float oz, float t,
+        float ox, float oy, float oz, float tw, float th,
         Vector3 normal, Color color)
     {
         var baseIndex = verts.Count;
         Vector3 v0, v1, v2, v3;
-        if (normal.X > 0.5f)      { v0 = new(ox+t, oy, oz); v1 = new(ox+t, oy, oz+t); v2 = new(ox+t, oy+t, oz+t); v3 = new(ox+t, oy+t, oz); }
-        else if (normal.X < -0.5f) { v0 = new(ox, oy, oz+t); v1 = new(ox, oy, oz); v2 = new(ox, oy+t, oz); v3 = new(ox, oy+t, oz+t); }
-        else if (normal.Y > 0.5f)  { v0 = new(ox, oy+t, oz); v1 = new(ox+t, oy+t, oz); v2 = new(ox+t, oy+t, oz+t); v3 = new(ox, oy+t, oz+t); }
-        else if (normal.Y < -0.5f) { v0 = new(ox, oy, oz+t); v1 = new(ox+t, oy, oz+t); v2 = new(ox+t, oy, oz); v3 = new(ox, oy, oz); }
-        else if (normal.Z > 0.5f)  { v0 = new(ox+t, oy, oz+t); v1 = new(ox, oy, oz+t); v2 = new(ox, oy+t, oz+t); v3 = new(ox+t, oy+t, oz+t); }
-        else                        { v0 = new(ox, oy, oz); v1 = new(ox+t, oy, oz); v2 = new(ox+t, oy+t, oz); v3 = new(ox, oy+t, oz); }
+        if (normal.X > 0.5f)      { v0 = new(ox+tw, oy, oz); v1 = new(ox+tw, oy, oz+tw); v2 = new(ox+tw, oy+th, oz+tw); v3 = new(ox+tw, oy+th, oz); }
+        else if (normal.X < -0.5f) { v0 = new(ox, oy, oz+tw); v1 = new(ox, oy, oz); v2 = new(ox, oy+th, oz); v3 = new(ox, oy+th, oz+tw); }
+        else if (normal.Y > 0.5f)  { v0 = new(ox, oy+th, oz); v1 = new(ox+tw, oy+th, oz); v2 = new(ox+tw, oy+th, oz+tw); v3 = new(ox, oy+th, oz+tw); }
+        else if (normal.Y < -0.5f) { v0 = new(ox, oy, oz+tw); v1 = new(ox+tw, oy, oz+tw); v2 = new(ox+tw, oy, oz); v3 = new(ox, oy, oz); }
+        else if (normal.Z > 0.5f)  { v0 = new(ox+tw, oy, oz+tw); v1 = new(ox, oy, oz+tw); v2 = new(ox, oy+th, oz+tw); v3 = new(ox+tw, oy+th, oz+tw); }
+        else                        { v0 = new(ox, oy, oz); v1 = new(ox+tw, oy, oz); v2 = new(ox+tw, oy+th, oz); v3 = new(ox, oy+th, oz); }
 
         verts.Add(v0); verts.Add(v1); verts.Add(v2); verts.Add(v3);
         normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
