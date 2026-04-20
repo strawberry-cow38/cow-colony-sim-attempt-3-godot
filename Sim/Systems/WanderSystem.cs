@@ -13,11 +13,11 @@ public static class WanderSystem
     public static void Step(World world, TileWorld tiles, Random rng)
     {
         var withPath = new HashSet<Entity>();
-        world.Stream<PathRequest>().For((Entity e, ref PathRequest _) => withPath.Add(e));
-        world.Stream<PathCurrent>().For((Entity e, ref PathCurrent _) => withPath.Add(e));
+        world.Stream<PathRequest>().For((in Entity e, ref PathRequest _) => withPath.Add(e));
+        world.Stream<PathCurrent>().For((in Entity e, ref PathCurrent _) => withPath.Add(e));
 
         var toPlan = new List<(Entity Entity, Position Pos)>();
-        world.Stream<Position, Colonist>().For((Entity e, ref Position p, ref Colonist _) =>
+        world.Stream<Position, Colonist>().For((in Entity e, ref Position p, ref Colonist _) =>
         {
             if (withPath.Contains(e)) return;
             toPlan.Add((e, p));

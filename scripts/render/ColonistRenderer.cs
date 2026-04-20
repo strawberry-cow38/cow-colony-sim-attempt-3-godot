@@ -31,7 +31,7 @@ public sealed partial class ColonistRenderer : Node3D
         if (_simHost == null) return;
 
         var seen = new HashSet<Entity>();
-        _simHost.World.Stream<Position, Colonist>().For((Entity e, ref Position p, ref Colonist _) =>
+        _simHost.World.Stream<Position, Colonist>().For((in Entity e, ref Position p, ref Colonist _) =>
         {
             seen.Add(e);
             if (!_instances.TryGetValue(e, out var mi))

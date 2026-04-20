@@ -10,7 +10,7 @@ public static class PathPlanSystem
     public static void Step(World world, TileWorld tiles)
     {
         var toPlan = new List<(Entity Entity, TilePos Start, TilePos Goal)>();
-        world.Stream<Position, PathRequest>().For((Entity e, ref Position p, ref PathRequest req) =>
+        world.Stream<Position, PathRequest>().For((in Entity e, ref Position p, ref PathRequest req) =>
         {
             toPlan.Add((e, TileMath.TileAt(p), req.Goal));
         });

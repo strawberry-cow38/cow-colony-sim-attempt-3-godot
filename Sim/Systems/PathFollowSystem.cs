@@ -14,7 +14,7 @@ public static class PathFollowSystem
         var arrived = new List<Entity>();
         var step = SpeedMetersPerSecond * dt;
 
-        world.Stream<Position, PathCurrent>().For((Entity e, ref Position p, ref PathCurrent path) =>
+        world.Stream<Position, PathCurrent>().For((in Entity e, ref Position p, ref PathCurrent path) =>
         {
             if (path.NextIndex >= path.Nodes.Length)
             {
