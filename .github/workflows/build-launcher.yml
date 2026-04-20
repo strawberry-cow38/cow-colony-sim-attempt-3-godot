@@ -1,0 +1,42 @@
+name: Build Launcher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "launcher/**"
+      - ".github/workflows/build-launcher.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish launcher (single-file self-contained)
+        run: dotnet publish launcher/CowLauncher.csproj -c Release -r win-x64 --self-contained -o launcher-out
+
+      - name: Upload to launcher-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd launcher-out
+          ls -la
+          gh release delete launcher-latest --yes || true
+          git push origin :refs/tags/launcher-latest || true
+          gh release create launcher-latest \
+            --title "Launcher (latest)" \
+            --notes "Rolling launcher build from main @ ${GITHUB_SHA:0:7}. Download CowLauncher.exe and replace your local copy." \
+            CowLauncher.exe
