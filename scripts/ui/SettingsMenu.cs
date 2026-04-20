@@ -21,21 +21,38 @@ public sealed partial class SettingsMenu : CanvasLayer
 
     private static readonly string[] WindowModes = { "Windowed", "Borderless", "Fullscreen" };
 
+    private static readonly (string Label, Viewport.Msaa Mode)[] MsaaModes =
+    {
+        ("Off",    Viewport.Msaa.Disabled),
+        ("MSAA 2x", Viewport.Msaa.Msaa2X),
+        ("MSAA 4x", Viewport.Msaa.Msaa4X),
+        ("MSAA 8x", Viewport.Msaa.Msaa8X),
+    };
+
     private Panel _panel = null!;
     private OptionButton _resolutionDropdown = null!;
     private OptionButton _windowModeDropdown = null!;
+    private OptionButton _msaaDropdown = null!;
+    private CheckBox _taaCheck = null!;
+    private CheckBox _fxaaCheck = null!;
+    private CheckBox _vsyncCheck = null!;
     private Button _checkUpdateButton = null!;
     private Label _updateStatus = null!;
     private Label _currentResolutionLabel = null!;
 
     private int _resolutionIndex = 2;
     private int _windowModeIndex = 0;
+    private int _msaaIndex = 2;      // MSAA 4x default
+    private bool _taaEnabled = true;
+    private bool _fxaaEnabled = true;
+    private bool _vsyncEnabled = false;
 
     public override void _Ready()
     {
         Layer = 100;
         Load();
         ApplyWindow();
+        ApplyRendering();
         BuildUi();
         _panel.Visible = false;
     }
@@ -55,7 +72,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _panel = new Panel
         {
             AnchorLeft = 0.5f, AnchorTop = 0.5f, AnchorRight = 0.5f, AnchorBottom = 0.5f,
-            OffsetLeft = -220, OffsetTop = -180, OffsetRight = 220, OffsetBottom = 180,
+            OffsetLeft = -240, OffsetTop = -260, OffsetRight = 240, OffsetBottom = 260,
         };
         AddChild(_panel);
 
@@ -85,6 +102,27 @@ public sealed partial class SettingsMenu : CanvasLayer
 
         _currentResolutionLabel = new Label { Text = "" };
         vb.AddChild(_currentResolutionLabel);
+
+        vb.AddChild(new HSeparator());
+        vb.AddChild(new Label { Text = "Anti-aliasing" });
+
+        _msaaDropdown = new OptionButton();
+        foreach (var m in MsaaModes) _msaaDropdown.AddItem(m.Label);
+        _msaaDropdown.Selected = _msaaIndex;
+        _msaaDropdown.ItemSelected += idx => { _msaaIndex = (int)idx; ApplyRendering(); Save(); };
+        vb.AddChild(_msaaDropdown);
+
+        _taaCheck = new CheckBox { Text = "TAA (Temporal AA)", ButtonPressed = _taaEnabled };
+        _taaCheck.Toggled += on => { _taaEnabled = on; ApplyRendering(); Save(); };
+        vb.AddChild(_taaCheck);
+
+        _fxaaCheck = new CheckBox { Text = "FXAA", ButtonPressed = _fxaaEnabled };
+        _fxaaCheck.Toggled += on => { _fxaaEnabled = on; ApplyRendering(); Save(); };
+        vb.AddChild(_fxaaCheck);
+
+        _vsyncCheck = new CheckBox { Text = "VSync", ButtonPressed = _vsyncEnabled };
+        _vsyncCheck.Toggled += on => { _vsyncEnabled = on; ApplyRendering(); Save(); };
+        vb.AddChild(_vsyncCheck);
 
         vb.AddChild(new HSeparator());
         _checkUpdateButton = new Button { Text = "Check for Updates" };
@@ -127,12 +165,26 @@ public sealed partial class SettingsMenu : CanvasLayer
         }
     }
 
+    private void ApplyRendering()
+    {
+        var vp = GetViewport();
+        if (vp == null) return;
+        vp.Msaa3D = MsaaModes[Mathf.Clamp(_msaaIndex, 0, MsaaModes.Length - 1)].Mode;
+        vp.UseTaa = _taaEnabled;
+        vp.ScreenSpaceAA = _fxaaEnabled ? Viewport.ScreenSpaceAAEnum.Fxaa : Viewport.ScreenSpaceAAEnum.Disabled;
+        DisplayServer.WindowSetVsyncMode(_vsyncEnabled ? DisplayServer.VSyncMode.Enabled : DisplayServer.VSyncMode.Disabled);
+    }
+
     private void Load()
     {
         var cfg = new ConfigFile();
         if (cfg.Load(ConfigPath) != Error.Ok) return;
         _resolutionIndex = Mathf.Clamp((int)cfg.GetValue("display", "resolution_index", 2), 0, Resolutions.Length - 1);
         _windowModeIndex = Mathf.Clamp((int)cfg.GetValue("display", "window_mode", 0), 0, WindowModes.Length - 1);
+        _msaaIndex = Mathf.Clamp((int)cfg.GetValue("render", "msaa_index", 2), 0, MsaaModes.Length - 1);
+        _taaEnabled = (bool)cfg.GetValue("render", "taa", true);
+        _fxaaEnabled = (bool)cfg.GetValue("render", "fxaa", true);
+        _vsyncEnabled = (bool)cfg.GetValue("render", "vsync", false);
     }
 
     private void Save()
@@ -140,6 +192,10 @@ public sealed partial class SettingsMenu : CanvasLayer
         var cfg = new ConfigFile();
         cfg.SetValue("display", "resolution_index", _resolutionIndex);
         cfg.SetValue("display", "window_mode", _windowModeIndex);
+        cfg.SetValue("render", "msaa_index", _msaaIndex);
+        cfg.SetValue("render", "taa", _taaEnabled);
+        cfg.SetValue("render", "fxaa", _fxaaEnabled);
+        cfg.SetValue("render", "vsync", _vsyncEnabled);
         cfg.Save(ConfigPath);
     }
 
