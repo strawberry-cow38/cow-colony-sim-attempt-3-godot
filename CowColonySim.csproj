@@ -1,0 +1,12 @@
+<Project Sdk="Godot.NET.Sdk/4.6.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>CowColonySim</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Fennecs" Version="0.5.*" />
+  </ItemGroup>
+</Project>
