@@ -21,9 +21,59 @@ public sealed class NaiveChunkMesher : IChunkMesher
         return lodLevel switch
         {
             <= 0 => BuildFullVoxel(snapshot, chunkKey),
-            1    => BuildHeightmap(snapshot, chunkKey, step: 1),
-            _    => BuildHeightmap(snapshot, chunkKey, step: 4),
+            1    => BuildSingleChunkHeightmap(snapshot, chunkKey, step: 1),
+            _    => BuildSingleChunkHeightmap(snapshot, chunkKey, step: 4),
         };
+    }
+
+    public MeshBuildResult? BuildGroupMesh(
+        ChunkSnapshot?[,] snapshots, TilePos baseChunkKey, int groupChunks, int step, int lodLevel)
+    {
+        var size = Chunk.Size;
+        var sizeX = groupChunks * size;
+        var sizeZ = groupChunks * size;
+        var colHeight = new int[sizeX, sizeZ];
+        var colKind = new TileKind[sizeX, sizeZ];
+        var revSum = 0;
+
+        for (var cz = 0; cz < groupChunks; cz++)
+        for (var cx = 0; cx < groupChunks; cx++)
+        {
+            var snap = snapshots[cx, cz];
+            if (!snap.HasValue)
+            {
+                for (var lz = 0; lz < size; lz++)
+                for (var lx = 0; lx < size; lx++)
+                {
+                    colHeight[cx * size + lx, cz * size + lz] = -1;
+                    colKind[cx * size + lx, cz * size + lz] = TileKind.Empty;
+                }
+                continue;
+            }
+            var s = snap.Value;
+            revSum += s.Revision;
+            for (var lz = 0; lz < size; lz++)
+            for (var lx = 0; lx < size; lx++)
+            {
+                var top = -1;
+                var kind = TileKind.Empty;
+                for (var ly = size - 1; ly >= 0; ly--)
+                {
+                    var t = s[lx, ly, lz];
+                    if (!t.IsEmpty) { top = ly; kind = t.Kind; break; }
+                }
+                colHeight[cx * size + lx, cz * size + lz] = top;
+                colKind[cx * size + lx, cz * size + lz] = kind;
+            }
+        }
+
+        var baseWx = baseChunkKey.X * size;
+        var baseWz = baseChunkKey.Z * size;
+        var mesh = BuildHeightmapMesh(colHeight, colKind, sizeX, sizeZ, baseWx, baseWz, step);
+        if (mesh == null) return null;
+        mesh.Revision = revSum;
+        mesh.LodLevel = lodLevel;
+        return mesh;
     }
 
     private static MeshBuildResult? BuildFullVoxel(ChunkSnapshot snapshot, TilePos chunkKey)
@@ -80,14 +130,9 @@ public sealed class NaiveChunkMesher : IChunkMesher
         };
     }
 
-    private static MeshBuildResult? BuildHeightmap(ChunkSnapshot snapshot, TilePos chunkKey, int step)
+    private static MeshBuildResult? BuildSingleChunkHeightmap(ChunkSnapshot snapshot, TilePos chunkKey, int step)
     {
         var size = Chunk.Size;
-        var tw = TileCoord.TileW;
-        var th = TileCoord.TileH;
-        var baseWx = chunkKey.X * size;
-        var baseWz = chunkKey.Z * size;
-
         var colHeight = new int[size, size];
         var colKind = new TileKind[size, size];
         for (var lz = 0; lz < size; lz++)
@@ -104,18 +149,35 @@ public sealed class NaiveChunkMesher : IChunkMesher
             colKind[lx, lz] = kind;
         }
 
-        var cellCount = (size + step - 1) / step;
-        var dsHeight = new int[cellCount, cellCount];
-        var dsKind = new TileKind[cellCount, cellCount];
-        for (var cz = 0; cz < cellCount; cz++)
-        for (var cx = 0; cx < cellCount; cx++)
+        var baseWx = chunkKey.X * size;
+        var baseWz = chunkKey.Z * size;
+        var mesh = BuildHeightmapMesh(colHeight, colKind, size, size, baseWx, baseWz, step);
+        if (mesh == null) return null;
+        mesh.Revision = snapshot.Revision;
+        mesh.LodLevel = step == 1 ? 1 : 2;
+        return mesh;
+    }
+
+    private static MeshBuildResult? BuildHeightmapMesh(
+        int[,] colHeight, TileKind[,] colKind, int sizeX, int sizeZ,
+        int baseWx, int baseWz, int step)
+    {
+        var tw = TileCoord.TileW;
+        var th = TileCoord.TileH;
+
+        var cellsX = (sizeX + step - 1) / step;
+        var cellsZ = (sizeZ + step - 1) / step;
+        var dsHeight = new int[cellsX, cellsZ];
+        var dsKind = new TileKind[cellsX, cellsZ];
+        for (var cz = 0; cz < cellsZ; cz++)
+        for (var cx = 0; cx < cellsX; cx++)
         {
             var lx0 = cx * step;
             var lz0 = cz * step;
             var hi = -1;
             var kind = TileKind.Empty;
-            for (var dz = 0; dz < step && lz0 + dz < size; dz++)
-            for (var dx = 0; dx < step && lx0 + dx < size; dx++)
+            for (var dz = 0; dz < step && lz0 + dz < sizeZ; dz++)
+            for (var dx = 0; dx < step && lx0 + dx < sizeX; dx++)
             {
                 var h = colHeight[lx0 + dx, lz0 + dz];
                 if (h > hi) { hi = h; kind = colKind[lx0 + dx, lz0 + dz]; }
@@ -132,8 +194,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
         var up = Vector3.Up;
         var wSpan = step * tw;
 
-        for (var cz = 0; cz < cellCount; cz++)
-        for (var cx = 0; cx < cellCount; cx++)
+        for (var cz = 0; cz < cellsZ; cz++)
+        for (var cx = 0; cx < cellsX; cx++)
         {
             var hi = dsHeight[cx, cz];
             if (hi < 0) continue;
@@ -162,16 +224,16 @@ public sealed class NaiveChunkMesher : IChunkMesher
             indices.Add(baseIndex); indices.Add(baseIndex + 2); indices.Add(baseIndex + 3);
 
             EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellCount, cx, cz, hi, sideCell,
+                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
                 ox, oz, wSpan, th, dirX: 1, dirZ: 0);
             EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellCount, cx, cz, hi, sideCell,
+                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
                 ox, oz, wSpan, th, dirX: -1, dirZ: 0);
             EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellCount, cx, cz, hi, sideCell,
+                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
                 ox, oz, wSpan, th, dirX: 0, dirZ: 1);
             EmitCliffSide(verts, normals, colors, uvs, indices,
-                dsHeight, cellCount, cx, cz, hi, sideCell,
+                dsHeight, cellsX, cellsZ, cx, cz, hi, sideCell,
                 ox, oz, wSpan, th, dirX: 0, dirZ: -1);
         }
 
@@ -184,8 +246,6 @@ public sealed class NaiveChunkMesher : IChunkMesher
             Colors = colors.ToArray(),
             Uvs = uvs.ToArray(),
             Indices = indices.ToArray(),
-            Revision = snapshot.Revision,
-            LodLevel = step == 1 ? 1 : 2,
         };
     }
 
@@ -195,17 +255,17 @@ public sealed class NaiveChunkMesher : IChunkMesher
         List<Color> colors,
         List<Vector2> uvs,
         List<int> indices,
-        int[,] dsHeight, int cellCount,
+        int[,] dsHeight, int cellsX, int cellsZ,
         int cx, int cz, int hi, int sideCell,
         float ox, float oz, float wSpan, float th,
         int dirX, int dirZ)
     {
         var nx = cx + dirX;
         var nz = cz + dirZ;
-        // Out-of-chunk neighbors: assume same height (skip emit). Prevents
-        // full-height skirt walls at every chunk border; cross-chunk
-        // cliffs remain invisible, tolerable for distant LOD.
-        if ((uint)nx >= cellCount || (uint)nz >= cellCount) return;
+        // Out-of-region neighbors: assume same height (skip emit). Prevents
+        // full-height skirt walls at region borders; cross-region cliffs
+        // remain invisible, tolerable for distant LOD.
+        if ((uint)nx >= cellsX || (uint)nz >= cellsZ) return;
         var hn = dsHeight[nx, nz];
         if (hn >= hi) return;
 

@@ -49,7 +49,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private bool _taaEnabled = true;
     private bool _fxaaEnabled = true;
     private bool _vsyncEnabled = false;
-    private int _renderDistance = 32;
+    private int _renderDistance = 128;
 
     public override void _Ready()
     {
@@ -135,7 +135,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         vb.AddChild(_renderDistanceLabel);
         _renderDistanceSlider = new HSlider
         {
-            MinValue = 4, MaxValue = 64, Step = 1, Value = _renderDistance,
+            MinValue = 8, MaxValue = 256, Step = 1, Value = _renderDistance,
             CustomMinimumSize = new Vector2(0, 24),
         };
         _renderDistanceSlider.ValueChanged += v =>
@@ -213,7 +213,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _taaEnabled = (bool)cfg.GetValue("render", "taa", true);
         _fxaaEnabled = (bool)cfg.GetValue("render", "fxaa", true);
         _vsyncEnabled = (bool)cfg.GetValue("render", "vsync", false);
-        _renderDistance = Mathf.Clamp((int)cfg.GetValue("world", "render_distance", 32), 4, 64);
+        _renderDistance = Mathf.Clamp((int)cfg.GetValue("world", "render_distance", 128), 8, 256);
     }
 
     private void Save()
