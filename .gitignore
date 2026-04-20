@@ -22,6 +22,7 @@ obj/
 *.sln.DotSettings.user
 .mono/
 *.csproj.user
+*.csproj.old
 
 # Builds
 build/
