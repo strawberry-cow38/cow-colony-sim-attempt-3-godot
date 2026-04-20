@@ -75,6 +75,45 @@ public class TileWorldTests
     }
 
     [Fact]
+    public void Chunk_Revision_Increments_On_Write()
+    {
+        var chunk = new Chunk();
+        Assert.Equal(0, chunk.Revision);
+
+        chunk[0, 0, 0] = new Tile(TileKind.Solid);
+        Assert.Equal(1, chunk.Revision);
+
+        chunk[5, 5, 5] = new Tile(TileKind.Floor);
+        Assert.Equal(2, chunk.Revision);
+    }
+
+    [Fact]
+    public void Chunk_Revision_Skips_Equal_Writes()
+    {
+        var chunk = new Chunk();
+        chunk[0, 0, 0] = new Tile(TileKind.Solid);
+        Assert.Equal(1, chunk.Revision);
+
+        chunk[0, 0, 0] = new Tile(TileKind.Solid);
+        Assert.Equal(1, chunk.Revision);
+    }
+
+    [Fact]
+    public void Chunk_Snapshot_Is_Isolated_From_Writes()
+    {
+        var chunk = new Chunk();
+        chunk[1, 2, 3] = new Tile(TileKind.Solid);
+        var snap = chunk.Snapshot();
+
+        chunk[1, 2, 3] = new Tile(TileKind.Floor);
+
+        Assert.Equal(TileKind.Solid, snap[1, 2, 3].Kind);
+        Assert.Equal(TileKind.Floor, chunk[1, 2, 3].Kind);
+        Assert.Equal(1, snap.Revision);
+        Assert.Equal(2, chunk.Revision);
+    }
+
+    [Fact]
     public void Bulk_Fill_Stress()
     {
         var world = new TileWorld();

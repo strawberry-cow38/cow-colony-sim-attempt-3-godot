@@ -6,6 +6,10 @@ public sealed class TileWorld
 
     public int ChunkCount => _chunks.Count;
 
+    public IEnumerable<KeyValuePair<TilePos, Chunk>> EnumerateChunks() => _chunks;
+
+    public Chunk? GetChunkOrNull(TilePos chunkKey) => _chunks.TryGetValue(chunkKey, out var c) ? c : null;
+
     public Tile Get(TilePos pos)
     {
         var (chunkKey, lx, ly, lz) = Split(pos);
