@@ -234,8 +234,6 @@ public sealed class NaiveChunkMesher : IChunkMesher
         return mesh;
     }
 
-    private const int SkirtDepthTiles = 6;
-
     private static MeshBuildResult? BuildHeightmapMesh(
         int[,] colHeight, TileKind[,] colKind, int sizeX, int sizeZ,
         int baseWx, int baseWz, int step,
@@ -346,9 +344,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 if (hi < 0) { inner++; continue; }
 
                 var (hn, hasN) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx, cz, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
-                var emitCliff = hasN && hn < hi;
-                var emitSkirt = !hasN;
-                if (!emitCliff && !emitSkirt) { inner++; continue; }
+                if (!hasN || hn >= hi) { inner++; continue; }
 
                 var kind = dsKind[cx, cz];
                 var runStart = inner;
@@ -360,18 +356,13 @@ public sealed class NaiveChunkMesher : IChunkMesher
                     if (dsHeight[cx2, cz2] != hi) break;
                     if (dsKind[cx2, cz2] != kind) break;
                     var (hn2, hasN2) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx2, cz2, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
-                    var cliff2 = hasN2 && hn2 < hi;
-                    var skirt2 = !hasN2;
-                    if (cliff2 != emitCliff || skirt2 != emitSkirt) break;
-                    if (emitCliff && hn2 != hn) break;
+                    if (!hasN2 || hn2 != hn) break;
                     innerEnd++;
                 }
 
                 var runLen = innerEnd - runStart;
                 var yTop = (hi + 1) * th;
-                var yBot = emitCliff
-                    ? (hn + 1) * th
-                    : Mathf.Max(0f, (hi + 1 - SkirtDepthTiles) * th);
+                var yBot = (hn + 1) * th;
 
                 var ox = (alongZ ? outer : runStart) * step * tw;
                 var oz = (alongZ ? runStart : outer) * step * tw;
