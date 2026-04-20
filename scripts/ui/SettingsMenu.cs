@@ -194,7 +194,7 @@ public sealed partial class SettingsMenu : CanvasLayer
 
     private static async Task<string?> FetchLatestTagAsync()
     {
-        using var http = new HttpClient();
+        using var http = new System.Net.Http.HttpClient();
         http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CowColonySim", "1.0"));
         var url = $"https://api.github.com/repos/{RepoOwner}/{RepoName}/releases/latest";
         using var res = await http.GetAsync(url);
