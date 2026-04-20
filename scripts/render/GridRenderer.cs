@@ -14,7 +14,7 @@ public sealed partial class GridRenderer : Node3D
     private const int Tier0Range = 2;    // L0: per-chunk voxel
     private const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
     private const int Tier3Range = 32;   // L3: G4 group (4x4 chunks) heightmap step=4
-    // else L4: G8 group (8x8 chunks) heightmap step=16
+    // else L4: G8 group (8x8 chunks) heightmap step=32, skip cliffs under 3 tiles
 
     private const int Group4 = 4;
     private const int Group8 = 8;
@@ -92,8 +92,8 @@ public sealed partial class GridRenderer : Node3D
         Profiler.End("PerChunk");
 
         Profiler.Begin("Groups");
-        UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4);
-        UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 16);
+        UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4,  cliffMinDelta: 1);
+        UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 32, cliffMinDelta: 3);
         Profiler.End("Groups");
 
         Profiler.SetCounter("L0+L1 slots", _slots.Count);
@@ -195,7 +195,7 @@ public sealed partial class GridRenderer : Node3D
     private void UpdateGroupSlots(
         Dictionary<TilePos, GroupRenderSlot> table,
         Dictionary<TilePos, List<TilePos>> masks,
-        int groupSize, int lod, int step)
+        int groupSize, int lod, int step, int cliffMinDelta)
     {
         foreach (var (groupKey, chunkKeys) in masks)
         {
@@ -241,9 +241,10 @@ public sealed partial class GridRenderer : Node3D
             var maskHashCaptured = maskHash;
             var lodCaptured = lod;
             var stepCaptured = step;
+            var cliffMinCaptured = cliffMinDelta;
             Task.Run(() =>
             {
-                var r = _mesher.BuildGroupMesh(entries, key, size, stepCaptured, lodCaptured);
+                var r = _mesher.BuildGroupMesh(entries, key, size, stepCaptured, lodCaptured, cliffMinCaptured);
                 _completedGroup.Enqueue((key, size, r, lodCaptured, maskHashCaptured));
             });
         }
@@ -276,6 +277,7 @@ public sealed partial class GridRenderer : Node3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey),
             MaterialOverride = _material,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
     }
 

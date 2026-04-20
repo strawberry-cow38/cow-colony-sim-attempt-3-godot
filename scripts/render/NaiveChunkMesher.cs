@@ -96,7 +96,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
     }
 
     public MeshBuildResult? BuildGroupMesh(
-        List<GroupChunkEntry> entries, TilePos baseChunkKey, int groupChunks, int step, int lodLevel)
+        List<GroupChunkEntry> entries, TilePos baseChunkKey, int groupChunks, int step, int lodLevel,
+        int cliffMinDelta = 1)
     {
         var size = Chunk.Size;
         var sizeX = groupChunks * size;
@@ -145,7 +146,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
 
         var baseWx = baseChunkKey.X * size;
         var baseWz = baseChunkKey.Z * size;
-        var mesh = BuildHeightmapMesh(colHeight, colKind, sizeX, sizeZ, baseWx, baseWz, step);
+        var mesh = BuildHeightmapMesh(colHeight, colKind, sizeX, sizeZ, baseWx, baseWz, step,
+            cliffMinDelta: cliffMinDelta);
         if (mesh == null) return null;
         mesh.Revision = revSum;
         mesh.LodLevel = lodLevel;
@@ -238,7 +240,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
         int[,] colHeight, TileKind[,] colKind, int sizeX, int sizeZ,
         int baseWx, int baseWz, int step,
         int[]? bPosX = null, int[]? bNegX = null,
-        int[]? bPosZ = null, int[]? bNegZ = null)
+        int[]? bPosZ = null, int[]? bNegZ = null,
+        int cliffMinDelta = 1)
     {
         var tw = TileCoord.TileW;
         var th = TileCoord.TileH;
@@ -270,28 +273,52 @@ public sealed class NaiveChunkMesher : IChunkMesher
         var uvs = new List<Vector2>();
         var indices = new List<int>();
         var up = Vector3.Up;
-        var wSpan = step * tw;
 
+        var visited = new bool[cellsX, cellsZ];
         for (var cz = 0; cz < cellsZ; cz++)
         for (var cx = 0; cx < cellsX; cx++)
         {
+            if (visited[cx, cz]) continue;
             var hi = dsHeight[cx, cz];
-            if (hi < 0) continue;
+            if (hi < 0) { visited[cx, cz] = true; continue; }
             var kind = dsKind[cx, cz];
+
+            var w = 1;
+            while (cx + w < cellsX && !visited[cx + w, cz]
+                && dsHeight[cx + w, cz] == hi && dsKind[cx + w, cz] == kind) w++;
+
+            var h = 1;
+            var canExtend = true;
+            while (canExtend && cz + h < cellsZ)
+            {
+                for (var i = 0; i < w; i++)
+                {
+                    if (visited[cx + i, cz + h] || dsHeight[cx + i, cz + h] != hi || dsKind[cx + i, cz + h] != kind)
+                    { canExtend = false; break; }
+                }
+                if (canExtend) h++;
+            }
+
+            for (var dz = 0; dz < h; dz++)
+            for (var dx = 0; dx < w; dx++)
+                visited[cx + dx, cz + dz] = true;
+
             var lx = cx * step;
             var lz = cz * step;
             var ox = lx * tw;
             var oz = lz * tw;
             var oyTop = (hi + 1) * th;
+            var spanX = w * step * tw;
+            var spanZ = h * step * tw;
 
             var topCell = TileAtlas.CellForTop(kind, baseWx + lx, baseWz + lz);
             var (u0, v0, u1, v1) = TileAtlas.CellUV(topCell);
 
             var baseIndex = verts.Count;
             verts.Add(new Vector3(ox,         oyTop, oz));
-            verts.Add(new Vector3(ox + wSpan, oyTop, oz));
-            verts.Add(new Vector3(ox + wSpan, oyTop, oz + wSpan));
-            verts.Add(new Vector3(ox,         oyTop, oz + wSpan));
+            verts.Add(new Vector3(ox + spanX, oyTop, oz));
+            verts.Add(new Vector3(ox + spanX, oyTop, oz + spanZ));
+            verts.Add(new Vector3(ox,         oyTop, oz + spanZ));
             uvs.Add(new Vector2(u0, v0));
             uvs.Add(new Vector2(u1, v0));
             uvs.Add(new Vector2(u1, v1));
@@ -301,10 +328,10 @@ public sealed class NaiveChunkMesher : IChunkMesher
             indices.Add(baseIndex); indices.Add(baseIndex + 2); indices.Add(baseIndex + 3);
         }
 
-        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 1,  dirZ: 0,  bPosX, bNegX, bPosZ, bNegZ);
-        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: -1, dirZ: 0,  bPosX, bNegX, bPosZ, bNegZ);
-        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 0,  dirZ: 1,  bPosX, bNegX, bPosZ, bNegZ);
-        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 0,  dirZ: -1, bPosX, bNegX, bPosZ, bNegZ);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 1,  dirZ: 0,  bPosX, bNegX, bPosZ, bNegZ, cliffMinDelta);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: -1, dirZ: 0,  bPosX, bNegX, bPosZ, bNegZ, cliffMinDelta);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 0,  dirZ: 1,  bPosX, bNegX, bPosZ, bNegZ, cliffMinDelta);
+        EmitGreedyCliffDir(verts, normals, colors, uvs, indices, dsHeight, dsKind, cellsX, cellsZ, th, tw, step, dirX: 0,  dirZ: -1, bPosX, bNegX, bPosZ, bNegZ, cliffMinDelta);
 
         if (indices.Count == 0) return null;
 
@@ -327,7 +354,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
         int[,] dsHeight, TileKind[,] dsKind,
         int cellsX, int cellsZ, float th, float tw, int step,
         int dirX, int dirZ,
-        int[]? bPosX, int[]? bNegX, int[]? bPosZ, int[]? bNegZ)
+        int[]? bPosX, int[]? bNegX, int[]? bPosZ, int[]? bNegZ,
+        int cliffMinDelta)
     {
         var alongZ = dirX != 0;
         var outerCount = alongZ ? cellsX : cellsZ;
@@ -344,7 +372,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 if (hi < 0) { inner++; continue; }
 
                 var (hn, hasN) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx, cz, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
-                if (!hasN || hn >= hi) { inner++; continue; }
+                if (!hasN || hi - hn < cliffMinDelta) { inner++; continue; }
 
                 var kind = dsKind[cx, cz];
                 var runStart = inner;
@@ -356,7 +384,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
                     if (dsHeight[cx2, cz2] != hi) break;
                     if (dsKind[cx2, cz2] != kind) break;
                     var (hn2, hasN2) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx2, cz2, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
-                    if (!hasN2 || hn2 != hn) break;
+                    if (!hasN2 || hn2 != hn || hi - hn2 < cliffMinDelta) break;
                     innerEnd++;
                 }
 
