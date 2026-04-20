@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot;
 using CowColonySim.Sim.Grid;
+using CowColonySim.UI;
 using GArray = Godot.Collections.Array;
 
 namespace CowColonySim.Render;
@@ -50,8 +51,11 @@ public sealed partial class GridRenderer : Node3D
     {
         if (_simHost == null) return;
 
+        Profiler.Begin("Drain");
         DrainCompleted();
+        Profiler.End("Drain");
 
+        Profiler.Begin("Classify");
         var cam = GetViewport()?.GetCamera3D();
         var camPos = cam?.GlobalPosition ?? Vector3.Zero;
         var camChunkX = Mathf.FloorToInt(camPos.X / (Chunk.Size * TileCoord.TileW));
@@ -81,10 +85,30 @@ public sealed partial class GridRenderer : Node3D
                 AddToBucket(g8Masks, GroupKey(ck, Group8), ck);
             }
         }
+        Profiler.End("Classify");
 
+        Profiler.Begin("PerChunk");
         UpdatePerChunkSlots(perChunkTier);
+        Profiler.End("PerChunk");
+
+        Profiler.Begin("Groups");
         UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4);
         UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 8);
+        Profiler.End("Groups");
+
+        Profiler.SetCounter("L0+L1 slots", _slots.Count);
+        Profiler.SetCounter("G4 slots", _g4Slots.Count);
+        Profiler.SetCounter("G8 slots", _g8Slots.Count);
+        Profiler.SetCounter("InFlight", CountInFlight());
+    }
+
+    private long CountInFlight()
+    {
+        long n = 0;
+        foreach (var kv in _slots) if (kv.Value.InFlight) n++;
+        foreach (var kv in _g4Slots) if (kv.Value.InFlight) n++;
+        foreach (var kv in _g8Slots) if (kv.Value.InFlight) n++;
+        return n;
     }
 
     private void DrainCompleted()
