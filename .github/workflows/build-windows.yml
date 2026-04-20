@@ -65,7 +65,7 @@ jobs:
         run: echo "$HOME/godot-bin" >> $GITHUB_PATH
 
       - name: Restore .NET packages
-        run: dotnet restore
+        run: dotnet restore CowColonySim.csproj
 
       - name: Godot --import
         run: |
@@ -73,7 +73,7 @@ jobs:
           godot --headless --import --quit
 
       - name: Build C# assembly
-        run: dotnet build -c ExportRelease --no-restore
+        run: dotnet build CowColonySim.csproj -c ExportRelease --no-restore
 
       - name: Export Windows release
         run: |
