@@ -51,7 +51,8 @@ public sealed partial class OrbitCamera : Camera3D
         var cosY = Mathf.Cos(yaw);
         var worldX = -fwd * sinY + right * cosY;
         var worldZ = -fwd * cosY - right * sinY;
-        var step = PanSpeed * (float)delta;
+        var multiplier = Input.IsKeyPressed(Key.Shift) ? 2.0f : 1.0f;
+        var step = PanSpeed * multiplier * (float)delta;
         Target += new Vector3(worldX * step, 0, worldZ * step);
         UpdateTransform();
     }

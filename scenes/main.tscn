@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3 uid="uid://b0cowcolsimmain"]
+[gd_scene load_steps=6 format=3 uid="uid://b0cowcolsimmain"]
 
 [ext_resource type="Script" path="res://scripts/core/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://scripts/render/GridRenderer.cs" id="2_grid"]
 [ext_resource type="Script" path="res://scripts/render/OrbitCamera.cs" id="3_orbit"]
 [ext_resource type="Script" path="res://scripts/render/ColonistRenderer.cs" id="4_colonist"]
+[ext_resource type="Script" path="res://scripts/ui/SettingsMenu.cs" id="5_settings"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -22,3 +23,6 @@ script = ExtResource("2_grid")
 
 [node name="ColonistRenderer" type="Node3D" parent="."]
 script = ExtResource("4_colonist")
+
+[node name="SettingsMenu" type="CanvasLayer" parent="."]
+script = ExtResource("5_settings")
