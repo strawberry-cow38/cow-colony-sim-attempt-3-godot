@@ -10,9 +10,9 @@ namespace CowColonySim.Render;
 public sealed partial class GridRenderer : Node3D
 {
     // Chebyshev chunk-distance cutoffs for LOD selection.
-    private const int Tier0Range = 4;    // L0: per-chunk voxel
-    private const int Tier1Range = 16;   // L1: per-chunk heightmap step=1
-    private const int Tier3Range = 64;   // L3: G4 group (4x4 chunks) heightmap step=4
+    private const int Tier0Range = 2;    // L0: per-chunk voxel
+    private const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
+    private const int Tier3Range = 32;   // L3: G4 group (4x4 chunks) heightmap step=4
     // else L4: G8 group (8x8 chunks) heightmap step=8
 
     private const int Group4 = 4;
