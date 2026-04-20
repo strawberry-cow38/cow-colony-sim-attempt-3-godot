@@ -1,4 +1,4 @@
-using CowColonySim.Sim.World;
+using CowColonySim.Sim.Grid;
 using Xunit;
 
 namespace CowColonySim.Tests;

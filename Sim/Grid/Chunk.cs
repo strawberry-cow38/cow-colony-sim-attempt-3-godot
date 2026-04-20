@@ -1,4 +1,4 @@
-namespace CowColonySim.Sim.World;
+namespace CowColonySim.Sim.Grid;
 
 public sealed class Chunk
 {

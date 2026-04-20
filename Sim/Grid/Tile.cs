@@ -1,4 +1,4 @@
-namespace CowColonySim.Sim.World;
+namespace CowColonySim.Sim.Grid;
 
 public enum TileKind : byte
 {

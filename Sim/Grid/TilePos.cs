@@ -1,4 +1,4 @@
-namespace CowColonySim.Sim.World;
+namespace CowColonySim.Sim.Grid;
 
 public readonly record struct TilePos(int X, int Y, int Z)
 {
