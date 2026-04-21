@@ -94,15 +94,20 @@ public class WorldGenTests
         var world = new TileWorld();
         WorldGen.Generate(world, seed: 1234, sizeX: 32, sizeZ: 32);
 
-        // Every column in the generated footprint must carry a terrain
-        // height matching the voxel surface (column top = height - 1, so
-        // stored corner height = height).
+        // Every column in the footprint must carry a terrain height that
+        // matches the voxel surface. Land columns: SurfaceY returns y above
+        // topmost grass/sand (== stored height). Lake columns: SurfaceY
+        // returns WaterLevelY (top of water fill); stored height is the
+        // column's dry floor below sea level.
         for (var x = -16; x < 16; x++)
         for (var z = -16; z < 16; z++)
         {
             var h = world.TerrainHeightAt(x, z);
             var surfaceY = WorldGen.SurfaceY(world, x, z);
-            Assert.Equal(surfaceY, h);
+            if (h < WorldGen.WaterLevelY)
+                Assert.Equal(WorldGen.WaterLevelY, surfaceY);
+            else
+                Assert.Equal(h, surfaceY);
         }
     }
 
