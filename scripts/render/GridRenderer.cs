@@ -85,7 +85,8 @@ public sealed partial class GridRenderer : Node3D
         if (_simHost == null) return;
 
         _frameDispatchChunk = 0;
-        _frameDispatchGroup = 0;
+        _frameDispatchG4 = 0;
+        _frameDispatchG8 = 0;
 
         Profiler.Begin("Drain");
         DrainCompleted();
@@ -222,9 +223,12 @@ public sealed partial class GridRenderer : Node3D
     private const int DrainChunkBudget = 4;
     private const int DrainGroupBudget = 2;
     private const int DispatchChunkBudget = 4;
+    // Per-group-size budget so a G4 burst can't starve G8 (or vice versa)
+    // when both need rebuilds on the same pan.
     private const int DispatchGroupBudget = 2;
     private int _frameDispatchChunk;
-    private int _frameDispatchGroup;
+    private int _frameDispatchG4;
+    private int _frameDispatchG8;
 
     private void DrainCompleted()
     {
@@ -380,7 +384,8 @@ public sealed partial class GridRenderer : Node3D
                 }
             }
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
-            if (_frameDispatchGroup >= DispatchGroupBudget) continue;
+            ref var dispatchCount = ref (groupSize == Group4 ? ref _frameDispatchG4 : ref _frameDispatchG8);
+            if (dispatchCount >= DispatchGroupBudget) continue;
 
             var entries = new List<NaiveChunkMesher.GroupChunkEntry>(chunkKeys.Count);
             foreach (var ck in chunkKeys)
@@ -394,7 +399,7 @@ public sealed partial class GridRenderer : Node3D
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
-            _frameDispatchGroup++;
+            dispatchCount++;
             var key = groupKey;
             var size = groupSize;
             var maskHashCaptured = maskHash;
@@ -458,7 +463,8 @@ public sealed partial class GridRenderer : Node3D
             // edit retriggers this group's rebuild.
             AccumulateBorderHash(yLevels, groupKey, groupSize, ref maskHash, ref revHash);
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
-            if (_frameDispatchGroup >= DispatchGroupBudget) continue;
+            ref var dispatchCount = ref (groupSize == Group4 ? ref _frameDispatchG4 : ref _frameDispatchG8);
+            if (dispatchCount >= DispatchGroupBudget) continue;
 
             var entries = new List<NaiveChunkMesher.GroupChunkEntry>(chunkKeys.Count);
             foreach (var ck in chunkKeys)
@@ -473,7 +479,7 @@ public sealed partial class GridRenderer : Node3D
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
-            _frameDispatchGroup++;
+            dispatchCount++;
             var key = groupKey;
             var size = groupSize;
             var maskHashCaptured = maskHash;

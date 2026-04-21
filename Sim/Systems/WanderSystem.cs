@@ -21,10 +21,13 @@ public static class WanderSystem
         world.Stream<PathCurrent>().For((in Entity e, ref PathCurrent _) => withPath.Add(e));
 
         var cooling = new HashSet<Entity>();
+        var expired = new List<Entity>();
         world.Stream<WanderCooldown>().For((in Entity e, ref WanderCooldown cd) =>
         {
             if (cd.NotBeforeTick > tick) cooling.Add(e);
+            else expired.Add(e);
         });
+        foreach (var e in expired) e.Remove<WanderCooldown>();
 
         var toPlan = new List<(Entity Entity, Position Pos)>();
         world.Stream<Position, Colonist>().For((in Entity e, ref Position p, ref Colonist _) =>
