@@ -10,7 +10,7 @@ public static class WanderSystem
     public const int WanderSearchRadius = 200;
     public const int MinDistanceFromStart = 3;
 
-    public static void Step(World world, TileWorld tiles, Random rng)
+    public static void Step(World world, TileWorld tiles, Random rng, long tick)
     {
         var withPath = new HashSet<Entity>();
         world.Stream<PathRequest>().For((in Entity e, ref PathRequest _) => withPath.Add(e));
@@ -20,6 +20,7 @@ public static class WanderSystem
         world.Stream<Position, Colonist>().For((in Entity e, ref Position p, ref Colonist _) =>
         {
             if (withPath.Contains(e)) return;
+            if (!CellGating.ShouldStepForTile(tiles, TileMath.TileAt(p), tick)) return;
             toPlan.Add((e, p));
         });
 

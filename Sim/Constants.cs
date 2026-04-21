@@ -18,6 +18,12 @@ public static class SimConstants
     public const int HeadroomTiles = 2;
     public const int ChunkSize = 16;
 
+    // Cells group chunks for streaming / tier gating. A cell is a square
+    // (X/Z) slab of CellSizeChunks × CellSizeChunks chunks, spanning the
+    // full vertical extent. 16 chunks = 256 tiles = 384m per side.
+    public const int CellSizeChunks = 16;
+    public const int CellSizeTiles = CellSizeChunks * ChunkSize;
+
     public const int SecondsPerDay = 60 * 24;
     public const int TicksPerDay = SimHz * SecondsPerDay;
 

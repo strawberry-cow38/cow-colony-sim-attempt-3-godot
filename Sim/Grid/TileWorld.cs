@@ -4,6 +4,7 @@ public sealed class TileWorld
 {
     private readonly Dictionary<TilePos, Chunk> _chunks = new();
     private readonly Dictionary<TilePos, ChunkState> _chunkStates = new();
+    private readonly Dictionary<CellKey, ChunkState> _cellStates = new();
 
     public int ChunkCount => _chunks.Count;
 
@@ -16,10 +17,21 @@ public sealed class TileWorld
 
     public IReadOnlyDictionary<TilePos, ChunkState> ChunkStates => _chunkStates;
 
+    public ChunkState GetCellState(CellKey key)
+        => _cellStates.TryGetValue(key, out var s) ? s : ChunkState.Dormant;
+
+    public IReadOnlyDictionary<CellKey, ChunkState> CellStates => _cellStates;
+
     public void ReplaceChunkStates(IReadOnlyDictionary<TilePos, ChunkState> next)
     {
         _chunkStates.Clear();
         foreach (var kv in next) _chunkStates[kv.Key] = kv.Value;
+    }
+
+    public void ReplaceCellStates(IReadOnlyDictionary<CellKey, ChunkState> next)
+    {
+        _cellStates.Clear();
+        foreach (var kv in next) _cellStates[kv.Key] = kv.Value;
     }
 
     public Tile Get(TilePos pos)

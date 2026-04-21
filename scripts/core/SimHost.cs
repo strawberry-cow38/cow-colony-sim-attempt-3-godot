@@ -45,7 +45,7 @@ public partial class SimHost : Node
 	private void Step(int tick)
 	{
 		TimeOfDay.Step();
-		WanderSystem.Step(World, Tiles, _rng);
+		WanderSystem.Step(World, Tiles, _rng, tick);
 		PathPlanSystem.Step(World, Tiles);
 		PathFollowSystem.Step(World, (float)SimConstants.SimDt);
 		if (tick % SimConstants.SimHz == 0) ChunkTierSystem.Step(World, Tiles);

@@ -45,6 +45,15 @@ public static class ChunkTierSystem
         foreach (var key in halo) Bump(tiers, key, ChunkState.Ambient);
 
         tiles.ReplaceChunkStates(tiers);
+
+        var cells = new Dictionary<CellKey, ChunkState>();
+        foreach (var kv in tiers)
+        {
+            var cellKey = Cell.FromChunk(kv.Key);
+            if (!cells.TryGetValue(cellKey, out var cur) || kv.Value > cur)
+                cells[cellKey] = kv.Value;
+        }
+        tiles.ReplaceCellStates(cells);
     }
 
     private static void Bump(Dictionary<TilePos, ChunkState> tiers, TilePos key, ChunkState state)
