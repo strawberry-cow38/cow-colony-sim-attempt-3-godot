@@ -17,6 +17,10 @@ uniform vec3 moon_color : source_color = vec3(0.85, 0.90, 1.0);
 uniform float night_amount = 0.0;
 uniform float sunset_amount = 0.0;
 uniform float ground_darken = 0.4;
+// Below-horizon plate color. Set brown so dither gaps in distant LOD terrain
+// read as ground instead of sky — masks the residual G4/G8 crossfade leaks
+// without having to perfectly stitch the geometry.
+uniform vec3 ground_color : source_color = vec3(0.35, 0.25, 0.18);
 
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -55,7 +59,7 @@ void sky() {
     if (up >= 0.0) {
         sky_col = mix(horizon, zenith, pow(up01, 0.55));
     } else {
-        sky_col = horizon * ground_darken;
+        sky_col = ground_color;
     }
 
     float sun_d = max(dot(dir, normalize(sun_dir)), 0.0);

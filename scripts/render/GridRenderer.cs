@@ -677,13 +677,12 @@ public sealed partial class GridRenderer : Node3D
         const float chunkM = Chunk.Size * TileCoord.TileW;
         const float tier1m = Tier1Range * chunkM;
         const float tier3m = Tier3Range * chunkM;
-        // 2 chunks of overlap between G4 fade_out and G8 fade_in. Wider band
-        // smears per-fragment dither mismatches caused by G4 averaging heights
-        // over 4×4 tiles vs G8 over 8×8 — one tier's cliff fragments can
-        // discard on a pixel where the other tier has no geometry, letting
-        // sky through. A 2-chunk band keeps those misaligned pixels sparse
-        // enough to read as shading noise instead of bright cracks.
-        const float fadeMargin = 2f * chunkM;
+        // 1 chunk G4 fade_out / G8 fade_in overlap. Residual per-pixel sky
+        // leaks where tier heights disagree are masked by a brown skybox
+        // below the horizon (see dream_sky.gdshader) rather than fixed
+        // geometrically — widening the band only smears the leaks, and
+        // recoloring the floor hides them entirely.
+        const float fadeMargin = chunkM;
         // Hard fog-end kill: discard any fragment past fog depth-end so G8
         // patches don't leak bright pixels through heavy fog at the horizon.
         var fogEnd = MaxChunkDistance * chunkM;
