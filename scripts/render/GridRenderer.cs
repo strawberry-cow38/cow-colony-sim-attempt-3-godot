@@ -693,10 +693,16 @@ public sealed partial class GridRenderer : Node3D
         // geometrically — widening the band only smears the leaks, and
         // recoloring the floor hides them entirely.
         const float fadeMargin = chunkM;
-        // Hard fog-end kill: discard any fragment past fog depth-end so G8
-        // patches don't leak bright pixels through heavy fog at the horizon.
+        // Cylindrical fog: XZ-distance ramp from Tier1 edge to max draw
+        // distance. Unlike Godot's depth fog this uses horizontal distance
+        // only, so sky + below-horizon plate stay unfogged. fog_end_m
+        // doubles as hard-discard so past-range G8 fragments never draw.
+        // Godot's built-in depth fog is disabled in DayNightRenderer to
+        // avoid fogging the sky.
         var fogEnd = MaxChunkDistance * chunkM;
+        m.SetShaderParameter("fog_begin_m", tier1m);
         m.SetShaderParameter("fog_end_m", fogEnd);
+        m.SetShaderParameter("fog_color", new Vector3(0.75f, 0.80f, 0.85f));
         if (groupSize == Group4)
         {
             m.SetShaderParameter("fade_in_start_m", tier1m - fadeMargin);
