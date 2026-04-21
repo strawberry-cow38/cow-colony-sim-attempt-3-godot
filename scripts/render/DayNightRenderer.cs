@@ -94,11 +94,20 @@ public sealed partial class DayNightRenderer : Node3D
             GlowEnabled = false,
             TonemapMode = Godot.Environment.ToneMapper.Filmic,
             TonemapExposure = 1.0f,
-            // Built-in fog disabled: Godot's depth fog is planar (fogs sky +
-            // below-horizon plate by view-direction distance). Cylindrical
-            // XZ-distance fog lives in terrain_heightmap.gdshader so only
-            // ground fogs out — sky and floor plate stay clean.
-            FogEnabled = false,
+            // Depth fog on every terrain tier via Godot's lighting path.
+            // FogSkyAffect = 0 keeps the sky shader (incl. below-horizon
+            // brown floor plate) untouched so only ground fogs out —
+            // matches the "cylinder around cam, leaving sky + floor free"
+            // intent at top-down camera angles without needing a custom
+            // shader on L0/L1's StandardMaterial3D.
+            FogEnabled = true,
+            FogMode = Godot.Environment.FogModeEnum.Depth,
+            FogDepthBegin = 144f,
+            FogDepthEnd = 1536f,
+            FogDepthCurve = 1.0f,
+            FogLightColor = new Color(0.75f, 0.80f, 0.85f),
+            FogLightEnergy = 1.0f,
+            FogSkyAffect = 0f,
         };
         _worldEnv.Environment = env;
     }

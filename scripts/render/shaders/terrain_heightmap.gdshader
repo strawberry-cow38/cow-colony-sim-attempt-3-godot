@@ -39,15 +39,11 @@ uniform float fade_in_start_m = 0.0;
 uniform float fade_in_end_m = 0.0;
 uniform float fade_out_start_m = 0.0;
 uniform float fade_out_end_m = 0.0;
-// Cylindrical fog. fog_end_m doubles as hard-discard distance so G8
-// fragments past it never draw. Ramp runs [fog_begin_m, fog_end_m] based
-// on XZ distance from gimbal — not view-depth — so sky + below-horizon
-// plate stay unfogged. Godot's built-in depth fog is disabled in
-// DayNightRenderer; this replaces it for terrain. Defaults disable both
-// ramp and discard (ramp needs end > begin; 1e9 = never discard).
-uniform float fog_begin_m = 1e9;
+// Hard clip past fog depth-end. Godot's built-in depth fog (with
+// FogSkyAffect=0) handles the visual fog ramp across all tiers; this
+// stays in place to discard G8 fragments past the cylindrical range so
+// past-distance patches don't draw at all.
 uniform float fog_end_m = 1e9;
-uniform vec3 fog_color : source_color = vec3(0.75, 0.80, 0.85);
 // Tint for debug / palette.
 // Darken to match the tone L0/G4 terrain lands at after StandardMaterial3D
 // shading — raw grass texels are brighter than the lit near-field look.
@@ -149,11 +145,6 @@ void fragment() {
 	float top_factor = smoothstep(0.5, 0.9, world_n.y);
 	vec4 tex = mix(dirt, grass, top_factor);
 
-	vec3 albedo = tex.rgb * tint.rgb;
-	if (fog_end_m > fog_begin_m) {
-		float fog_t = clamp((d - fog_begin_m) / (fog_end_m - fog_begin_m), 0.0, 1.0);
-		albedo = mix(albedo, fog_color, fog_t);
-	}
-	ALBEDO = albedo;
+	ALBEDO = tex.rgb * tint.rgb;
 	ROUGHNESS = 0.95;
 }
