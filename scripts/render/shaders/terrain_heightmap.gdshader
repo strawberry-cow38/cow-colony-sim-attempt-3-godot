@@ -24,8 +24,10 @@ float sample_height(vec2 uv_local) {
 }
 
 void vertex() {
-	// VERTEX.xz is already in local-space meters thanks to the mesh we upload.
-	vec2 uv_local = clamp(VERTEX.xz / patch_width_m, vec2(0.0), vec2(1.0));
+	// Sample heightmap via the UV attribute from the mesh. Stepped patches put
+	// multiple verts at the same XZ with different intended heights (wall top vs
+	// bottom), so we can't derive the sample coord from position alone.
+	vec2 uv_local = UV;
 	VERTEX.y += sample_height(uv_local);
 	UV = VERTEX.xz * (1.0 / 1.5); // 1.5m per tile → 1 unit of UV = 1 tile
 }

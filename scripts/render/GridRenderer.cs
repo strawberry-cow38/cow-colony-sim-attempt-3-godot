@@ -80,7 +80,8 @@ public sealed partial class GridRenderer : Node3D
             var g16Width = Group16 * Chunk.Size * TileCoord.TileW;
             var g8Width  = Group8  * Chunk.Size * TileCoord.TileW;
             _g16PatchMesh = GpuTerrain.BuildPatchMesh(G16CellsPerSide, g16Width);
-            _g8PatchMesh  = GpuTerrain.BuildPatchMesh(G8CellsPerSide,  g8Width);
+            // G8 is stepped — matches blocky look of L0/L1/G4 at the tier boundary.
+            _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width);
         }
     }
 
