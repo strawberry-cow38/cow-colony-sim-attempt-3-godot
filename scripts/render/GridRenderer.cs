@@ -14,9 +14,9 @@ public sealed partial class GridRenderer : Node3D
     // Euclidean (cylinder) chunk-distance cutoffs for LOD selection. Switching
     // from chebyshev (square) to euclidean (circle) drops the four corner
     // triangles of each ring — roughly 21% fewer chunks considered at any tier.
-    private const int Tier0Range = 2;    // L0: per-chunk voxel
-    private const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
-    private const int Tier3Range = 16;   // L3: G4 group (4x4 chunks) heightmap step=4
+    public const int Tier0Range = 2;    // L0: per-chunk voxel
+    public const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
+    public const int Tier3Range = 16;   // L3: G4 group (4x4 chunks) heightmap step=4
     // else L4: G8 group (8x8 chunks) heightmap step=32
 
     private const int Group4 = 4;

@@ -1,4 +1,5 @@
 using Godot;
+using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.Render;
 
@@ -82,6 +83,11 @@ public sealed partial class DayNightRenderer : Node3D
         _sky = new ShaderMaterial { Shader = shader };
 
         var sky = new Sky { SkyMaterial = _sky, RadianceSize = Sky.RadianceSizeEnum.Size128 };
+        // Fog ramp end sourced from GridRenderer's terrain cull distance so
+        // fog saturates exactly where the farthest tier stops meshing —
+        // terrain vanishes into solid fog instead of a visible cull edge.
+        var fogEnd = GridRenderer.MaxChunkDistance * Chunk.Size * TileCoord.TileW;
+        var fogBegin = GridRenderer.Tier1Range * Chunk.Size * TileCoord.TileW;
         var env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Sky,
@@ -96,14 +102,11 @@ public sealed partial class DayNightRenderer : Node3D
             TonemapExposure = 1.0f,
             // Depth fog on every terrain tier via Godot's lighting path.
             // FogSkyAffect = 0 keeps the sky shader (incl. below-horizon
-            // brown floor plate) untouched so only ground fogs out —
-            // matches the "cylinder around cam, leaving sky + floor free"
-            // intent at top-down camera angles without needing a custom
-            // shader on L0/L1's StandardMaterial3D.
+            // brown floor plate) untouched so only ground fogs out.
             FogEnabled = true,
             FogMode = Godot.Environment.FogModeEnum.Depth,
-            FogDepthBegin = 144f,
-            FogDepthEnd = 1536f,
+            FogDepthBegin = fogBegin,
+            FogDepthEnd = fogEnd,
             FogDepthCurve = 1.0f,
             FogLightColor = new Color(0.75f, 0.80f, 0.85f),
             FogLightEnergy = 1.0f,
