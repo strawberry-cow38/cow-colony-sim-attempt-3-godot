@@ -176,21 +176,22 @@ public sealed class HeightmapTerrainMesher
 
         if ((selfUpperA || selfUpperB) && !(selfLowerA || selfLowerB))
         {
-            // Self is the upper tile → wall faces +faceDirPlus (outward from self).
-            // Winding: bot → top on each side, outer face faces +faceDirPlus.
+            // Self is the upper tile → wall faces +faceDirPlus (outward from
+            // self, toward the lower neighbor's ground where the player views
+            // the cliff). B side first so CCW winding from +faceDirPlus side
+            // matches the supplied normal under Godot's front-face rule.
             EmitCliffQuad(verts, normals, colors, uvs, indices,
-                bl: botA, tl: topA, tr: topB, br: botB,
+                bl: botB, tl: topB, tr: topA, br: botA,
                 normal: faceDirPlus, kind);
         }
         else if ((selfLowerA || selfLowerB) && !(selfUpperA || selfUpperB))
         {
-            // Neighbor is the upper tile → wall faces -faceDirPlus. Reverse
-            // the perimeter order (B side before A) so CCW winding flips to
-            // match the flipped normal — otherwise back-face culling hides
-            // the outward face. Top = neighbor corners (our "bot" params,
-            // which are higher here); bottom = our own edge ("top" params).
+            // Neighbor is the upper tile → wall faces -faceDirPlus (outward
+            // from the cliff, toward self's lower ground). Top of wall =
+            // neighbor corners (our "bot" params, higher here); bottom = own
+            // edge ("top" params).
             EmitCliffQuad(verts, normals, colors, uvs, indices,
-                bl: topB, tl: botB, tr: botA, br: topA,
+                bl: topA, tl: botA, tr: botB, br: topB,
                 normal: -faceDirPlus, kind);
         }
         // else: either flat (no gap) or a twisted corner (one side self-upper,
