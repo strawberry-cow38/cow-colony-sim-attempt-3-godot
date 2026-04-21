@@ -48,6 +48,19 @@ public sealed partial class GridRenderer : Node3D
     private ArrayMesh? _g16PatchMesh;
     private const int G16CellsPerSide = 32; // 12m per cell at 384m patch
 
+    // Classify cache. The 27k-chunk walk was ~1.4ms every frame even when
+    // nothing moved. We cache the outputs and only redo the work when the
+    // camera crosses a chunk boundary, the chunk set changes (paging or
+    // worldgen), or the max draw distance slider moves.
+    private int _cacheCamChunkX = int.MinValue;
+    private int _cacheCamChunkZ = int.MinValue;
+    private int _cacheChunkCount = -1;
+    private int _cacheMaxDist = -1;
+    private Dictionary<TilePos, int>? _cachePerChunkTier;
+    private Dictionary<TilePos, List<TilePos>>? _cacheG4Masks;
+    private Dictionary<TilePos, List<TilePos>>? _cacheG8Masks;
+    private Dictionary<TilePos, List<TilePos>>? _cacheG16Masks;
+
     public override void _Ready()
     {
         _simHost = GetNode<SimHost>("/root/SimHost");
@@ -81,46 +94,67 @@ public sealed partial class GridRenderer : Node3D
         var camChunkX = Mathf.FloorToInt(camPos.X / (Chunk.Size * TileCoord.TileW));
         var camChunkZ = Mathf.FloorToInt(camPos.Z / (Chunk.Size * TileCoord.TileW));
 
-        var g4Masks = new Dictionary<TilePos, List<TilePos>>();
-        var g8Masks = new Dictionary<TilePos, List<TilePos>>();
-        var g16Masks = new Dictionary<TilePos, List<TilePos>>();
-        var perChunkTier = new Dictionary<TilePos, int>();
+        var chunkCount = _simHost.Tiles.ChunkCount;
+        var cacheHit = _cachePerChunkTier != null
+            && _cacheCamChunkX == camChunkX
+            && _cacheCamChunkZ == camChunkZ
+            && _cacheChunkCount == chunkCount
+            && _cacheMaxDist == MaxChunkDistance;
 
-        // Cell-scoped iteration: skip any cell whose XZ column is fully
-        // beyond MaxChunkDistance instead of walking every chunk in the world.
-        var camCellX = FloorDiv(camChunkX, Cell.SizeChunks);
-        var camCellZ = FloorDiv(camChunkZ, Cell.SizeChunks);
-        var cellRange = (MaxChunkDistance + Cell.SizeChunks - 1) / Cell.SizeChunks;
-        for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
-        for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
+        Dictionary<TilePos, int> perChunkTier;
+        Dictionary<TilePos, List<TilePos>> g4Masks, g8Masks, g16Masks;
+        if (cacheHit)
         {
-            var chunks = _simHost.Tiles.GetChunksInCell(new CellKey(cx, cz));
-            if (chunks == null) continue;
-            for (var i = 0; i < chunks.Count; i++)
+            perChunkTier = _cachePerChunkTier!;
+            g4Masks = _cacheG4Masks!;
+            g8Masks = _cacheG8Masks!;
+            g16Masks = _cacheG16Masks!;
+        }
+        else
+        {
+            perChunkTier = new Dictionary<TilePos, int>();
+            g4Masks = new Dictionary<TilePos, List<TilePos>>();
+            g8Masks = new Dictionary<TilePos, List<TilePos>>();
+            g16Masks = new Dictionary<TilePos, List<TilePos>>();
+
+            var camCellX = FloorDiv(camChunkX, Cell.SizeChunks);
+            var camCellZ = FloorDiv(camChunkZ, Cell.SizeChunks);
+            var cellRange = (MaxChunkDistance + Cell.SizeChunks - 1) / Cell.SizeChunks;
+            for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
+            for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
             {
-                var ck = chunks[i];
-                var dx = System.Math.Abs(ck.X - camChunkX);
-                var dz = System.Math.Abs(ck.Z - camChunkZ);
-                var d = System.Math.Max(dx, dz);
-                if (d > MaxChunkDistance) continue;
+                var chunks = _simHost.Tiles.GetChunksInCell(new CellKey(cx, cz));
+                if (chunks == null) continue;
+                for (var i = 0; i < chunks.Count; i++)
+                {
+                    var ck = chunks[i];
+                    var dx = System.Math.Abs(ck.X - camChunkX);
+                    var dz = System.Math.Abs(ck.Z - camChunkZ);
+                    var d = System.Math.Max(dx, dz);
+                    if (d > MaxChunkDistance) continue;
 
-                // Group-based classification. A chunk only joins a coarser
-                // group if the ENTIRE group footprint is outside the finer
-                // tier's max range — otherwise the coarser patch overlaps
-                // a finer slot that covers the same ground (z-fighting,
-                // "G8 inside G16"). See group_min_distance helper.
-                var g4Key  = GroupKey(ck, Group4);
-                var g8Key  = GroupKey(ck, Group8);
-                var g16Key = GroupKey(ck, Group16);
-                var g4d  = GroupMinChebyshev(g4Key,  Group4,  camChunkX, camChunkZ);
-                var g8d  = GroupMinChebyshev(g8Key,  Group8,  camChunkX, camChunkZ);
-                var g16d = GroupMinChebyshev(g16Key, Group16, camChunkX, camChunkZ);
+                    var g4Key  = GroupKey(ck, Group4);
+                    var g8Key  = GroupKey(ck, Group8);
+                    var g16Key = GroupKey(ck, Group16);
+                    var g4d  = GroupMinChebyshev(g4Key,  Group4,  camChunkX, camChunkZ);
+                    var g8d  = GroupMinChebyshev(g8Key,  Group8,  camChunkX, camChunkZ);
+                    var g16d = GroupMinChebyshev(g16Key, Group16, camChunkX, camChunkZ);
 
-                if (g16d > Tier4Range)        AddToBucket(g16Masks, g16Key, ck);
-                else if (g8d  > Tier3Range)   AddToBucket(g8Masks,  g8Key,  ck);
-                else if (g4d  > Tier1Range)   AddToBucket(g4Masks,  g4Key,  ck);
-                else                          perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
+                    if (g16d > Tier4Range)        AddToBucket(g16Masks, g16Key, ck);
+                    else if (g8d  > Tier3Range)   AddToBucket(g8Masks,  g8Key,  ck);
+                    else if (g4d  > Tier1Range)   AddToBucket(g4Masks,  g4Key,  ck);
+                    else                          perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
+                }
             }
+
+            _cachePerChunkTier = perChunkTier;
+            _cacheG4Masks = g4Masks;
+            _cacheG8Masks = g8Masks;
+            _cacheG16Masks = g16Masks;
+            _cacheCamChunkX = camChunkX;
+            _cacheCamChunkZ = camChunkZ;
+            _cacheChunkCount = chunkCount;
+            _cacheMaxDist = MaxChunkDistance;
         }
         Profiler.End("Classify");
 
