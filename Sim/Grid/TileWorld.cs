@@ -167,6 +167,38 @@ public sealed class TileWorld
     public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 
+    /// <summary>
+    /// Copy of a terrain chunk plus its +X / +Z / +XZ seam corners, for
+    /// worker-thread meshing. Returns null if the chunk isn't resident; the
+    /// seam falls back to the chunk's own edge corners if a neighbor is
+    /// missing (world border) so a solitary chunk meshes cleanly.
+    /// </summary>
+    public TerrainSnapshot? SnapshotTerrain(int cx, int cz)
+    {
+        if (!_terrainChunks.TryGetValue((cx, cz), out var tc)) return null;
+        const int s = TerrainChunk.Size;
+        var snap = new TerrainSnapshot(cx, cz, tc.Revision);
+        for (var lx = 0; lx < s; lx++)
+        for (var lz = 0; lz < s; lz++)
+        {
+            snap.Heights[lx, lz] = tc.Heights[lx, lz];
+            snap.Kinds[lx, lz]   = tc.Kinds[lx, lz];
+        }
+        _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
+        _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);
+        _terrainChunks.TryGetValue((cx + 1, cz + 1), out var pxz);
+        for (var lz = 0; lz < s; lz++)
+            snap.Heights[s, lz] = px?.Heights[0, lz] ?? tc.Heights[s - 1, lz];
+        for (var lx = 0; lx < s; lx++)
+            snap.Heights[lx, s] = pz?.Heights[lx, 0] ?? tc.Heights[lx, s - 1];
+        snap.Heights[s, s] =
+            pxz?.Heights[0, 0] ??
+            px?.Heights[0, s - 1] ??
+            pz?.Heights[s - 1, 0] ??
+            tc.Heights[s - 1, s - 1];
+        return snap;
+    }
+
     private TerrainChunk GetOrCreateTerrainChunk(int cx, int cz)
     {
         if (_terrainChunks.TryGetValue((cx, cz), out var tc)) return tc;

@@ -148,6 +148,71 @@ public class WorldGenTests
     }
 
     [Fact]
+    public void SnapshotTerrain_Returns_Null_When_Chunk_Absent()
+    {
+        var world = new TileWorld();
+        Assert.Null(world.SnapshotTerrain(0, 0));
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Copies_Owned_Corners_And_Kinds()
+    {
+        var world = new TileWorld();
+        // Touching any corner inside chunk (0,0) materializes it.
+        for (var lx = 0; lx < TerrainChunk.Size; lx++)
+        for (var lz = 0; lz < TerrainChunk.Size; lz++)
+        {
+            world.SetTerrainHeight(lx, lz, (short)(lx + lz));
+            world.SetTerrainKind(lx, lz, lx == 0 ? TileKind.Sand : TileKind.Floor);
+        }
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        for (var lx = 0; lx < TerrainChunk.Size; lx++)
+        for (var lz = 0; lz < TerrainChunk.Size; lz++)
+        {
+            Assert.Equal(lx + lz, snap!.Heights[lx, lz]);
+            Assert.Equal(lx == 0 ? (byte)TileKind.Sand : (byte)TileKind.Floor,
+                snap.Kinds[lx, lz]);
+        }
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Seam_Reads_From_Neighbor()
+    {
+        var world = new TileWorld();
+        const int s = TerrainChunk.Size;
+        // Write a baseline into chunk (0,0) so it materializes.
+        world.SetTerrainHeight(0, 0, 1);
+        // +X neighbor corner at world (s, 5) — owned by chunk (1,0) at lx=0,lz=5.
+        world.SetTerrainHeight(s, 5, 42);
+        // +Z neighbor corner at world (7, s).
+        world.SetTerrainHeight(7, s, 77);
+        // +XZ neighbor corner at world (s, s).
+        world.SetTerrainHeight(s, s, 99);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        Assert.Equal(42, snap!.Heights[s, 5]);
+        Assert.Equal(77, snap.Heights[7, s]);
+        Assert.Equal(99, snap.Heights[s, s]);
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Seam_Falls_Back_At_World_Edge()
+    {
+        var world = new TileWorld();
+        const int s = TerrainChunk.Size;
+        // Single chunk, no neighbors. Edge column at lx=s-1 set to 5;
+        // expect the seam row at lx=s to mirror it.
+        for (var lz = 0; lz < s; lz++)
+            world.SetTerrainHeight(s - 1, lz, 5);
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        for (var lz = 0; lz < s; lz++)
+            Assert.Equal(5, snap!.Heights[s, lz]);
+    }
+
+    [Fact]
     public void TerrainSlope_Reports_Max_Corner_Delta()
     {
         var world = new TileWorld();
