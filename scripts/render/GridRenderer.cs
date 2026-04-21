@@ -102,9 +102,16 @@ public sealed partial class GridRenderer : Node3D
         var camChunkZ = Mathf.FloorToInt(focus.Z / (Chunk.Size * TileCoord.TileW));
 
         var chunkCount = _simHost.Tiles.ChunkCount;
+        // 1-chunk hysteresis: cache hits anywhere in a 3×3 chunk window around
+        // the cached cam position. Halves the Classify rebuild rate on a
+        // steady pan. The ±1 overlap band in Classify absorbs the stale-by-up-
+        // to-one-chunk classification before a visible LOD seam appears.
+        var dxChunks = camChunkX - _cacheCamChunkX;
+        var dzChunks = camChunkZ - _cacheCamChunkZ;
         var cacheHit = _cachePerChunkTier != null
-            && _cacheCamChunkX == camChunkX
-            && _cacheCamChunkZ == camChunkZ
+            && _cacheCamChunkX != int.MinValue
+            && System.Math.Abs(dxChunks) <= 1
+            && System.Math.Abs(dzChunks) <= 1
             && _cacheChunkCount == chunkCount
             && _cacheMaxDist == MaxChunkDistance;
 
@@ -129,6 +136,14 @@ public sealed partial class GridRenderer : Node3D
             long tier0Sq = (long)Tier0Range * Tier0Range;
             long tier1Sq = (long)Tier1Range * Tier1Range;
             long tier3Sq = (long)Tier3Range * Tier3Range;
+            // Overlap bands: chunks within ±1 chunk of a tier boundary emit into
+            // BOTH the near and coarse bucket so L1/G4 and G4/G8 meshes render
+            // simultaneously. VisibilityRangeFadeMode.Self dithers between them
+            // — without the overlap there's nothing behind the fade-out, so the
+            // terrain pops. Fade band width here (1 chunk) must match the
+            // fadeMargin in ApplyLodFade.
+            long tier1InnerSq = (long)(Tier1Range - 1) * (Tier1Range - 1);
+            long tier3InnerSq = (long)(Tier3Range - 1) * (Tier3Range - 1);
             for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
             for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
             {
@@ -147,9 +162,12 @@ public sealed partial class GridRenderer : Node3D
                     long g4Sq  = GroupMinDistSq(g4Key, Group4, camChunkX, camChunkZ);
                     long g8Sq  = GroupMinDistSq(g8Key, Group8, camChunkX, camChunkZ);
 
-                    if (g8Sq > tier3Sq)       AddToBucket(g8Masks, g8Key, ck);
-                    else if (g4Sq > tier1Sq)  AddToBucket(g4Masks, g4Key, ck);
-                    else                      perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
+                    if (dSq <= tier1Sq)
+                        perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
+                    if (g4Sq > tier1InnerSq && g4Sq <= tier3Sq)
+                        AddToBucket(g4Masks, g4Key, ck);
+                    if (g8Sq > tier3InnerSq)
+                        AddToBucket(g8Masks, g8Key, ck);
                 }
             }
 
