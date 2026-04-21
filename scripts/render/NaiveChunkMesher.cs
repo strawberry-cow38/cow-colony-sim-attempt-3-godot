@@ -310,6 +310,12 @@ public sealed class NaiveChunkMesher : IChunkMesher
         {
             var tile = snapshot[lx, ly, lz];
             if (tile.IsEmpty) continue;
+            // HeightmapTerrainMesher owns Floor/Sand/Water geometry at L0.
+            // Voxel mesher keeps Solid (rock, walls, buildings). Tile stays
+            // non-empty for neighbor occupancy so rock side faces adjacent
+            // to terrain still cull correctly below the surface.
+            if (tile.Kind == TileKind.Floor || tile.Kind == TileKind.Sand || tile.Kind == TileKind.Water)
+                continue;
             var ox = lx * tw;
             var oy = ly * th;
             var oz = lz * tw;
