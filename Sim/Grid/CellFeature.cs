@@ -95,7 +95,10 @@ public sealed class FeatureNoises
                 return 6f + shaped * 120f;
             }
             case CellFeature.Lake:
-                return 1f + (Lake.GetNoise(x, z) + 1f) * 0.5f * 1.5f;
+                // Negative range — lakes dig real basins below sea level (Y=0).
+                // Bilerp with neighboring positive features carves a smooth
+                // shore where the interpolated height crosses zero.
+                return -8f + (Lake.GetNoise(x, z) + 1f) * 0.5f * 6f;
             default:
                 return 1f;
         }

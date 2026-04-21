@@ -4,7 +4,7 @@ namespace CowColonySim.Sim.Grid;
 
 public static class WorldGen
 {
-    public const int DefaultMinHeight = 1;
+    public const int DefaultMinHeight = -10;
     public const int DefaultMaxHeight = 103;
     public const float DefaultFrequency = 0.02f;
 
@@ -24,11 +24,11 @@ public static class WorldGen
     private const float CubbyBlendBand = 0.15f;
     private const float CubbyDepthTiles = 6f;
 
-    // Water level in tile coordinates. Columns whose surface y < WaterLevelY
-    // get Water tiles stacked on top up to (WaterLevelY - 1). Lake cells
-    // (height range 1..2.5) fully submerge; plains floor (y=2) is dry;
-    // ragged shoreline comes from the bilerp between lake + neighbor cells.
-    public const int WaterLevelY = 3;
+    // Sea level. Lake cells sample heights below 0 so they dig real basins
+    // into the world; every other feature stays positive. Water tiles fill
+    // every column whose surface y < WaterLevelY up to (WaterLevelY - 1).
+    // No bilerp gate needed — plains/hills/mountains never cross zero.
+    public const int WaterLevelY = 0;
 
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
@@ -117,13 +117,19 @@ public static class WorldGen
             var height = heights[xi, zi];
             var x = xi - halfX;
             var z = zi - halfZ;
-            for (var y = 0; y < height - 1; y++)
+            // For columns with positive surface y, fill solid from y=0 to top
+            // so cliff faces show rock down to sea level. For lake columns
+            // (negative top y), only fill 2 tiles of bedrock under the grass —
+            // anything deeper would be invisible underwater anyway.
+            var rockBase = Math.Min(0, height - 3);
+            for (var y = rockBase; y < height - 1; y++)
             {
                 tiles.Set(new TilePos(x, y, z), solid);
             }
             tiles.Set(new TilePos(x, height - 1, z), grass);
-            // Flood-fill water column for any ground-top below water level.
-            // Lake cells sink well below WaterLevelY; plains stay dry.
+            // Flood-fill water column for any ground-top below sea level.
+            // Lake cells (heights -8..-2) submerge fully; plains/hills/mts
+            // (all positive heights) never trigger water-fill.
             for (var y = height; y < WaterLevelY; y++)
             {
                 tiles.Set(new TilePos(x, y, z), water);
@@ -133,13 +139,13 @@ public static class WorldGen
         return surfaceTiles;
     }
 
-    public static int SurfaceY(TileWorld tiles, int x, int z, int maxProbe = 128)
+    public static int SurfaceY(TileWorld tiles, int x, int z, int maxProbe = 128, int minProbe = -16)
     {
-        for (var y = maxProbe; y >= 0; y--)
+        for (var y = maxProbe; y >= minProbe; y--)
         {
             if (!tiles.Get(new TilePos(x, y, z)).IsEmpty) return y + 1;
         }
-        return 0;
+        return minProbe;
     }
 
     private static float Smooth(float t) => t * t * (3f - 2f * t);

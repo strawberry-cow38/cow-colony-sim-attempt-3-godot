@@ -26,7 +26,10 @@ public static class TileAtlas
     private static readonly int[] GrassCells = { 0, 1, 2, 3, 4, 5, 6 };
     private const int DirtCell = 10;
     private const int RockCell = 13;
-    private const int SandCell = 15;
+    // Cell 9 in the atlas is a near-white fallback. Pairing it with a tint
+    // gives a clean colored surface — sand or dirt cells would muddy the
+    // multiplied result.
+    private const int WhiteCell = 9;
 
     public static int CellForTop(TileKind kind, int wx, int wz)
     {
@@ -34,7 +37,7 @@ public static class TileAtlas
         {
             TileKind.Floor => GrassCells[Hash(wx, wz) % GrassCells.Length],
             TileKind.Solid => DirtCell,
-            TileKind.Water => SandCell,
+            TileKind.Water => WhiteCell,
             _ => DirtCell,
         };
     }
@@ -45,17 +48,18 @@ public static class TileAtlas
         {
             TileKind.Floor => DirtCell,
             TileKind.Solid => RockCell,
-            TileKind.Water => SandCell,
+            TileKind.Water => WhiteCell,
             _ => DirtCell,
         };
     }
 
     // Vertex-color tint multiplied with the albedo texture (material has
     // vertex_color_use_as_albedo=true). Used to re-color shared atlas cells
-    // per TileKind without baking extra cells — Water picks up sand+blue.
+    // per TileKind without baking extra cells. Water rides on the white
+    // atlas cell so the multiply lands on a clean blue.
     public static Color TintFor(TileKind kind) => kind switch
     {
-        TileKind.Water => new Color(0.35f, 0.55f, 0.78f, 0.80f),
+        TileKind.Water => new Color(0.30f, 0.50f, 0.85f, 1f),
         _ => Colors.White,
     };
 

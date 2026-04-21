@@ -49,7 +49,9 @@ public class WorldGenTests
         for (var x = -4; x < 4; x++)
         for (var z = -4; z < 4; z++)
         {
-            Assert.True(WorldGen.SurfaceY(world, x, z) >= 1);
+            // Lake columns surface at WaterLevelY (water-top); land columns
+            // sit higher. Anything below WaterLevelY would mean an empty gap.
+            Assert.True(WorldGen.SurfaceY(world, x, z) >= WorldGen.WaterLevelY);
         }
     }
 
