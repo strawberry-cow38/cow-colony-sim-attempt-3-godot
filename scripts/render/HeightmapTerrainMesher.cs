@@ -75,11 +75,12 @@ public sealed class HeightmapTerrainMesher
             var p01 = new Vector3(x0, y01, z1);
             verts.Add(p00); verts.Add(p10); verts.Add(p11); verts.Add(p01);
 
-            // Flat normal per tile — the cross product of quad diagonals.
-            // Both triangles share this normal so adjacent tiles with
+            // Flat normal per tile — right-handed cross of (SW→NW) × (SW→SE)
+            // points +Y for a flat quad, tilting toward uphill corners for a
+            // ramp. Both triangles share this normal so adjacent tiles with
             // matching corner heights visually blend (same Y derivatives)
             // without needing vertex sharing across tile borders.
-            var nrm = (p10 - p00).Cross(p01 - p00).Normalized();
+            var nrm = (p01 - p00).Cross(p10 - p00).Normalized();
             if (nrm.LengthSquared() < 1e-6f) nrm = Vector3.Up;
             normals.Add(nrm); normals.Add(nrm); normals.Add(nrm); normals.Add(nrm);
 
@@ -90,9 +91,10 @@ public sealed class HeightmapTerrainMesher
             uvs.Add(new Vector2(u1, v1));
             uvs.Add(new Vector2(u0, v1));
 
-            // Two tris — wind CCW from above (Godot Y-up, X→right, Z→back).
-            indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 1);
-            indices.Add(vi + 0); indices.Add(vi + 3); indices.Add(vi + 2);
+            // Two tris: SW→SE→NE, SW→NE→NW. Matches NaiveChunkMesher's top-
+            // face winding so back-face cull shows the upward surface.
+            indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
+            indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
         }
 
         if (indices.Count == 0) return null;
