@@ -142,6 +142,29 @@ public sealed partial class GridRenderer : Node3D
         Profiler.SetCounter("G8 slots", _g8Slots.Count);
         Profiler.SetCounter("G16 slots", _g16Slots.Count);
         Profiler.SetCounter("InFlight", CountInFlight());
+
+        long l0 = 0, l1 = 0;
+        foreach (var kv in perChunkTier) { if (kv.Value == 0) l0++; else l1++; }
+        Profiler.SetCounter("L0 classed", l0);
+        Profiler.SetCounter("L1 classed", l1);
+        Profiler.SetCounter("G4 classed", g4Masks.Count);
+        Profiler.SetCounter("G8 classed", g8Masks.Count);
+        Profiler.SetCounter("G16 classed", g16Masks.Count);
+
+        long visible = 0;
+        foreach (var kv in _slots) if (kv.Value.MeshInstance.Visible && kv.Value.MeshInstance.Mesh != null) visible++;
+        foreach (var kv in _g4Slots) if (kv.Value.MeshInstance.Visible && kv.Value.MeshInstance.Mesh != null) visible++;
+        foreach (var kv in _g8Slots) if (kv.Value.MeshInstance.Visible && kv.Value.MeshInstance.Mesh != null) visible++;
+        foreach (var kv in _g16Slots) if (kv.Value.MeshInstance.Visible && kv.Value.MeshInstance.Mesh != null) visible++;
+        Profiler.SetCounter("Visible slots", visible);
+
+        Profiler.SetCounter("Chunks mem", _simHost.Tiles.ChunkCount);
+        long cellsMem = 0;
+        foreach (var _ in _simHost.Tiles.InMemoryCells) cellsMem++;
+        Profiler.SetCounter("Cells mem", cellsMem);
+        Profiler.SetCounter("Cell states", _simHost.Tiles.CellStates.Count);
+        Profiler.SetCounter("Page save IF", _simHost.Paging.SaveInFlightCount);
+        Profiler.SetCounter("Page load IF", _simHost.Paging.LoadInFlightCount);
     }
 
     private long CountInFlight()
@@ -164,6 +187,7 @@ public sealed partial class GridRenderer : Node3D
             slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
             slot.UploadedRevision = slot.RequestedRevision;
             slot.CurrentLod = result?.LodLevel ?? lod;
+            Profiler.IncRate(lod == 0 ? "L0 up/s" : "L1 up/s");
         }
         while (_completedGroup.TryDequeue(out var pack))
         {
@@ -175,6 +199,7 @@ public sealed partial class GridRenderer : Node3D
             slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = result?.LodLevel ?? lod;
+            Profiler.IncRate(groupSize == Group4 ? "G4 up/s" : groupSize == Group8 ? "G8 up/s" : "G16 up/s");
         }
         while (_completedGpuGroup.TryDequeue(out var pack))
         {
@@ -196,6 +221,7 @@ public sealed partial class GridRenderer : Node3D
             slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = patch?.LodLevel ?? lod;
+            Profiler.IncRate("G16gpu up/s");
         }
     }
 
@@ -247,6 +273,7 @@ public sealed partial class GridRenderer : Node3D
             var lod = tier;
             Task.Run(() =>
             {
+                var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 MeshBuildResult? r;
                 if (lod == 0)
                     r = _mesher.BuildFullVoxelWithNeighbors(snap, key,
@@ -254,6 +281,8 @@ public sealed partial class GridRenderer : Node3D
                 else
                     r = _mesher.BuildChunkHeightmapWithBorders(snap, key, step: 1,
                         snapPosX, snapNegX, snapPosZ, snapNegZ);
+                var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Profiler.RecordMs(lod == 0 ? "Build L0" : "Build L1", ms);
                 _completedChunk.Enqueue((key, r, lod));
             });
         }
@@ -315,7 +344,10 @@ public sealed partial class GridRenderer : Node3D
             var cliffMinCaptured = cliffMinDelta;
             Task.Run(() =>
             {
+                var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 var r = _mesher.BuildGroupMesh(entries, key, size, stepCaptured, lodCaptured, cliffMinCaptured);
+                var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Profiler.RecordMs(size == Group4 ? "Build G4" : size == Group8 ? "Build G8" : "Build G16", ms);
                 _completedGroup.Enqueue((key, size, r, lodCaptured, maskHashCaptured));
             });
         }
@@ -379,7 +411,10 @@ public sealed partial class GridRenderer : Node3D
             var lodCaptured = lod;
             Task.Run(() =>
             {
+                var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 var patch = _mesher.BuildGroupHeightmapPatch(entries, size, lodCaptured);
+                var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Profiler.RecordMs("Build G16 GPU", ms);
                 _completedGpuGroup.Enqueue((key, size, patch, lodCaptured, maskHashCaptured));
             });
         }

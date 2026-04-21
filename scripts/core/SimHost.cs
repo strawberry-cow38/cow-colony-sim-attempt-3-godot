@@ -7,6 +7,7 @@ using CowColonySim.Sim.Components;
 using CowColonySim.Sim.Grid;
 using CowColonySim.Sim.Pathfinding;
 using CowColonySim.Sim.Systems;
+using CowColonySim.UI;
 
 namespace CowColonySim;
 
@@ -51,12 +52,28 @@ public partial class SimHost : Node
 
 	private void Step(int tick)
 	{
+		Profiler.Begin("Sim tick");
 		TimeOfDay.Step();
+		Profiler.Begin("Wander");
 		WanderSystem.Step(World, Tiles, _rng, tick);
+		Profiler.End("Wander");
+		Profiler.Begin("PathPlan");
 		PathPlanSystem.Step(World, Tiles);
+		Profiler.End("PathPlan");
+		Profiler.Begin("PathFollow");
 		PathFollowSystem.Step(World, (float)SimConstants.SimDt);
-		if (tick % SimConstants.SimHz == 0) ChunkTierSystem.Step(World, Tiles);
+		Profiler.End("PathFollow");
+		if (tick % SimConstants.SimHz == 0)
+		{
+			Profiler.Begin("ChunkTier");
+			ChunkTierSystem.Step(World, Tiles);
+			Profiler.End("ChunkTier");
+		}
+		Profiler.Begin("Paging");
 		Paging.Step(Tiles, tick);
+		Profiler.End("Paging");
+		Profiler.End("Sim tick");
+		Profiler.IncRate("Sim ticks/s");
 	}
 
 	private static void WipeDir(string dir)
