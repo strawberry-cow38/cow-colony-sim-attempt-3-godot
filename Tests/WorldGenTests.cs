@@ -52,4 +52,34 @@ public class WorldGenTests
             Assert.True(WorldGen.SurfaceY(world, x, z) >= 1);
         }
     }
+
+    [Fact]
+    public void Generate_Is_Seamless_Across_Cell_Borders()
+    {
+        // Big enough to span several cells; cell borders are at
+        // x = cellHalf + k*cellSize = 128 + 256k relative to world center.
+        var world = new TileWorld();
+        WorldGen.Generate(world, seed: 1111, sizeX: 768, sizeZ: 64);
+
+        var maxStep = 0;
+        for (var z = -16; z < 16; z++)
+        for (var x = -383; x < 383; x++)
+        {
+            var a = WorldGen.SurfaceY(world, x, z);
+            var b = WorldGen.SurfaceY(world, x + 1, z);
+            var step = Math.Abs(a - b);
+            if (step > maxStep) maxStep = step;
+        }
+        // Bilerp of 4 continuous features — step between adjacent tiles must
+        // stay small. A hard cell-border seam would produce steps > 10.
+        Assert.True(maxStep <= 5, $"max per-tile step {maxStep} > 5");
+    }
+
+    [Fact]
+    public void FeatureResolver_Is_Deterministic()
+    {
+        var a = FeatureResolver.Pick(42, new CellKey(3, -2));
+        var b = FeatureResolver.Pick(42, new CellKey(3, -2));
+        Assert.Equal(a, b);
+    }
 }

@@ -12,17 +12,11 @@ public static class WorldGen
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
         float frequency = DefaultFrequency)
     {
-        var noise = new FastNoiseLite(seed);
-        noise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        noise.SetFrequency(frequency);
-        noise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        noise.SetFractalOctaves(4);
-        noise.SetFractalLacunarity(2.0f);
-        noise.SetFractalGain(0.5f);
-
+        var noises = new FeatureNoises(seed);
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
-        var range = maxHeight - minHeight;
+        const int cellSize = SimConstants.CellSizeTiles;
+        const int cellHalf = cellSize / 2;
 
         var heights = new int[sizeX, sizeZ];
         Parallel.For(0, sizeX, xi =>
@@ -31,11 +25,39 @@ public static class WorldGen
             {
                 var x = xi - halfX;
                 var z = zi - halfZ;
-                var n = noise.GetNoise(x, z);
-                var norm = (n + 1f) * 0.5f;
-                var h = minHeight + (int)MathF.Round(norm * range);
-                if (h < 1) h = 1;
-                heights[xi, zi] = h;
+
+                // 4-cell bilerp anchored on cell centers. Guarantees C0
+                // continuity across cell borders because weights sum to 1
+                // and each corner's feature height is a continuous global
+                // noise sampled at (x, z).
+                float cxf = (x - (float)cellHalf) / cellSize;
+                float czf = (z - (float)cellHalf) / cellSize;
+                int cx0 = (int)MathF.Floor(cxf);
+                int cz0 = (int)MathF.Floor(czf);
+                float fx = cxf - cx0;
+                float fz = czf - cz0;
+                float wx = Smooth(fx);
+                float wz = Smooth(fz);
+
+                var f00 = FeatureResolver.Pick(seed, new CellKey(cx0, cz0));
+                var f10 = FeatureResolver.Pick(seed, new CellKey(cx0 + 1, cz0));
+                var f01 = FeatureResolver.Pick(seed, new CellKey(cx0, cz0 + 1));
+                var f11 = FeatureResolver.Pick(seed, new CellKey(cx0 + 1, cz0 + 1));
+
+                float h00 = noises.SampleHeight(f00, x, z);
+                float h10 = noises.SampleHeight(f10, x, z);
+                float h01 = noises.SampleHeight(f01, x, z);
+                float h11 = noises.SampleHeight(f11, x, z);
+
+                float h = (1f - wx) * (1f - wz) * h00
+                        + wx         * (1f - wz) * h10
+                        + (1f - wx) * wz         * h01
+                        + wx         * wz         * h11;
+
+                int hi = (int)MathF.Round(h);
+                if (hi < minHeight) hi = minHeight;
+                if (hi > maxHeight) hi = maxHeight;
+                heights[xi, zi] = hi;
             }
         });
 
@@ -66,4 +88,6 @@ public static class WorldGen
         }
         return 0;
     }
+
+    private static float Smooth(float t) => t * t * (3f - 2f * t);
 }
