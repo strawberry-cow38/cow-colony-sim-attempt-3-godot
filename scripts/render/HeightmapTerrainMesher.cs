@@ -8,10 +8,8 @@ namespace CowColonySim.Render;
 /// <summary>
 /// Emits a single <see cref="MeshBuildResult"/> from a <see cref="TerrainSnapshot"/> —
 /// two triangles per tile spanning the tile's four corner heights, producing
-/// smooth slopes wherever corners step (AoE2 / Sims-style). Where the snapshot
-/// flags a cliff edge, the upper tile emits a vertical wall quad and the lower
-/// tile pulls its W / N corners down to its own floor height — giving true
-/// vertical faces above <see cref="WorldGen.CliffMinDelta"/>. Buildings and
+/// smooth slopes wherever corners step (AoE2 / Sims-style). Cliff wall geometry
+/// is NOT emitted; a height-1 step renders as a steep slope. Buildings and
 /// rock stay on the voxel mesher.
 ///
 /// Kinds:
@@ -48,22 +46,10 @@ public sealed class HeightmapTerrainMesher
             if (kind != TileKind.Floor && kind != TileKind.Sand && kind != TileKind.Water)
                 continue;
 
-            var mask = snap.CliffMask[lx, lz];
-
-            // Own column surface — the tile's "I belong on plateau-Y X" height.
-            // SW corner's natural value equals column (cx*s+lx, cz*s+lz) since
-            // worldgen stores per-column surface into the shared heightmap.
-            var ownCol = snap.Heights[lx, lz];
-
-            // Per-corner render height: MaxCornerY carries the max Y any
-            // adjacent cliff wants this corner raised to. We apply the hoist
-            // ONLY when the tile's own column is tall enough to participate
-            // in that plateau — lower / diagonal tiles stay at natural
-            // Heights, so there's no spike above voxel rock (= no hole).
-            short h00 = Render(snap, lx,     lz,     ownCol);
-            short h10 = Render(snap, lx + 1, lz,     ownCol);
-            short h11 = Render(snap, lx + 1, lz + 1, ownCol);
-            short h01 = Render(snap, lx,     lz + 1, ownCol);
+            var h00 = snap.Heights[lx,     lz    ];
+            var h10 = snap.Heights[lx + 1, lz    ];
+            var h11 = snap.Heights[lx + 1, lz + 1];
+            var h01 = snap.Heights[lx,     lz + 1];
 
             var waterDrop = kind == TileKind.Water ? WaterTopDropMeters : 0f;
             var y00 = h00 * th - waterDrop;
@@ -109,35 +95,6 @@ public sealed class HeightmapTerrainMesher
             // face winding so back-face cull shows the upward surface.
             indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
             indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
-
-            // Cliff faces. Upper tile owns its +X / +Z flagged edges — draws
-            // a single vertical quad from stored upper corners down to
-            // CliffLowerE / S. Lower side's W / N bit only pulls its own
-            // corners down; it never emits a face.
-            if ((mask & TerrainSnapshot.CliffBitE) != 0)
-            {
-                var upperY = snap.CliffUpperE[lx, lz] * th;
-                var lowerY = snap.CliffLowerE[lx, lz] * th;
-                EmitCliffFace(verts, normals, colors, uvs, indices,
-                    new Vector3(x1, lowerY, z0),
-                    new Vector3(x1, upperY, z0),
-                    new Vector3(x1, upperY, z1),
-                    new Vector3(x1, lowerY, z1),
-                    new Vector3(1f, 0f, 0f),
-                    kind);
-            }
-            if ((mask & TerrainSnapshot.CliffBitS) != 0)
-            {
-                var upperY = snap.CliffUpperS[lx, lz] * th;
-                var lowerY = snap.CliffLowerS[lx, lz] * th;
-                EmitCliffFace(verts, normals, colors, uvs, indices,
-                    new Vector3(x1, lowerY, z1),
-                    new Vector3(x1, upperY, z1),
-                    new Vector3(x0, upperY, z1),
-                    new Vector3(x0, lowerY, z1),
-                    new Vector3(0f, 0f, 1f),
-                    kind);
-            }
         }
 
         if (indices.Count == 0) return null;
@@ -152,43 +109,5 @@ public sealed class HeightmapTerrainMesher
             Revision = snap.Revision,
             LodLevel = 0,
         };
-    }
-
-    // Vertical cliff face. Four corners are passed in order:
-    //   bl (lower-start) → tl (upper-start) → tr (upper-end) → br (lower-end)
-    // so the two triangles (bl, tl, tr) and (bl, tr, br) wind CCW as seen
-    // from <paramref name="normal"/> — which is the outward direction the
-    // face should be visible from. Face is degenerate (zero-area) when the
-    // two upper corners are both at or below the lower Y; skipped in that
-    // case so we don't emit a flipped / zero-area quad.
-    private static short Render(TerrainSnapshot snap, int cx, int cz, short ownCol)
-    {
-        var natural = snap.Heights[cx, cz];
-        var hoist   = snap.MaxCornerY[cx, cz];
-        return ownCol >= hoist ? hoist : natural;
-    }
-
-    private static void EmitCliffFace(
-        List<Vector3> verts, List<Vector3> normals, List<Color> colors,
-        List<Vector2> uvs, List<int> indices,
-        Vector3 bl, Vector3 tl, Vector3 tr, Vector3 br,
-        Vector3 normal, TileKind kind)
-    {
-        if (tl.Y <= bl.Y && tr.Y <= br.Y) return;
-
-        var cell = TileAtlas.CellForSide(kind);
-        var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-        var tint = TileAtlas.TintFor(kind);
-
-        var vi = verts.Count;
-        verts.Add(bl); verts.Add(tl); verts.Add(tr); verts.Add(br);
-        normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
-        colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
-        uvs.Add(new Vector2(u0, v1));
-        uvs.Add(new Vector2(u0, v0));
-        uvs.Add(new Vector2(u1, v0));
-        uvs.Add(new Vector2(u1, v1));
-        indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
-        indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
     }
 }

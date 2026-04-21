@@ -164,29 +164,6 @@ public sealed class TileWorld
         MutationTick++;
     }
 
-    /// <summary>
-    /// Flag the east edge of tile (x, z) as a cliff. Tile (x, z) is the upper
-    /// platform; tile (x+1, z) renders its west edge corners at
-    /// <paramref name="lowerHeight"/> instead of the shared heightmap value.
-    /// </summary>
-    public void SetTerrainCliffE(int x, int z, short upperHeight, short lowerHeight)
-    {
-        var (cx, cz, lx, lz) = SplitXZ(x, z);
-        GetOrCreateTerrainChunk(cx, cz).SetCliffE(lx, lz, upperHeight, lowerHeight);
-        MutationTick++;
-    }
-
-    /// <summary>
-    /// Flag the south edge of tile (x, z) as a cliff. Upper platform is
-    /// (x, z); tile (x, z+1) is the lower floor.
-    /// </summary>
-    public void SetTerrainCliffS(int x, int z, short upperHeight, short lowerHeight)
-    {
-        var (cx, cz, lx, lz) = SplitXZ(x, z);
-        GetOrCreateTerrainChunk(cx, cz).SetCliffS(lx, lz, upperHeight, lowerHeight);
-        MutationTick++;
-    }
-
     public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 
@@ -206,23 +183,10 @@ public sealed class TileWorld
         {
             snap.Heights[lx, lz] = tc.Heights[lx, lz];
             snap.Kinds[lx, lz]   = tc.Kinds[lx, lz];
-            // Copy own E/S cliff bits; W/N bits + lower heights are derived
-            // below from -X / -Z neighbors.
-            var ownMask = (byte)(tc.CliffMask[lx, lz] & (TerrainChunk.CliffBitE | TerrainChunk.CliffBitS));
-            snap.CliffMask[lx, lz] = ownMask;
-            snap.CliffLowerE[lx, lz] = tc.CliffLowerE[lx, lz];
-            snap.CliffLowerS[lx, lz] = tc.CliffLowerS[lx, lz];
-            snap.CliffUpperE[lx, lz] = tc.CliffUpperE[lx, lz];
-            snap.CliffUpperS[lx, lz] = tc.CliffUpperS[lx, lz];
         }
         _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
         _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);
         _terrainChunks.TryGetValue((cx + 1, cz + 1), out var pxz);
-        _terrainChunks.TryGetValue((cx - 1, cz),     out var nx);
-        _terrainChunks.TryGetValue((cx,     cz - 1), out var nz);
-        _terrainChunks.TryGetValue((cx - 1, cz - 1), out var nxnz);
-        _terrainChunks.TryGetValue((cx - 1, cz + 1), out var nxpz);
-        _terrainChunks.TryGetValue((cx + 1, cz - 1), out var pxnz);
         for (var lz = 0; lz < s; lz++)
             snap.Heights[s, lz] = px?.Heights[0, lz] ?? tc.Heights[s - 1, lz];
         for (var lx = 0; lx < s; lx++)
@@ -232,99 +196,7 @@ public sealed class TileWorld
             px?.Heights[0, s - 1] ??
             pz?.Heights[s - 1, 0] ??
             tc.Heights[s - 1, s - 1];
-
-        // Seed MaxCornerY = natural Heights. Cliff hoists only raise it.
-        for (var lx = 0; lx <= s; lx++)
-        for (var lz = 0; lz <= s; lz++)
-            snap.MaxCornerY[lx, lz] = snap.Heights[lx, lz];
-
-        // Derive W / N bits from -X / -Z neighbors. Tile (lx, lz)'s W cliff
-        // exists when the owning tile to the west (either in this chunk at
-        // lx-1 or in the -X neighbor at s-1) has its E bit set. Mirror its
-        // stored E lower-height into our W slot so the mesher reads a
-        // self-contained snapshot.
-        for (var lz = 0; lz < s; lz++)
-        for (var lx = 0; lx < s; lx++)
-        {
-            byte westMask; short westLower;
-            if (lx == 0)
-            {
-                westMask = nx != null ? (byte)(nx.CliffMask[s - 1, lz] & TerrainChunk.CliffBitE) : (byte)0;
-                westLower = nx?.CliffLowerE[s - 1, lz] ?? (short)0;
-            }
-            else
-            {
-                westMask = (byte)(tc.CliffMask[lx - 1, lz] & TerrainChunk.CliffBitE);
-                westLower = tc.CliffLowerE[lx - 1, lz];
-            }
-            if (westMask != 0)
-            {
-                snap.CliffMask[lx, lz] |= TerrainSnapshot.CliffBitW;
-                snap.CliffLowerW[lx, lz] = westLower;
-            }
-
-            byte northMask; short northLower;
-            if (lz == 0)
-            {
-                northMask = nz != null ? (byte)(nz.CliffMask[lx, s - 1] & TerrainChunk.CliffBitS) : (byte)0;
-                northLower = nz?.CliffLowerS[lx, s - 1] ?? (short)0;
-            }
-            else
-            {
-                northMask = (byte)(tc.CliffMask[lx, lz - 1] & TerrainChunk.CliffBitS);
-                northLower = tc.CliffLowerS[lx, lz - 1];
-            }
-            if (northMask != 0)
-            {
-                snap.CliffMask[lx, lz] |= TerrainSnapshot.CliffBitN;
-                snap.CliffLowerN[lx, lz] = northLower;
-            }
-        }
-
-        // Hoist MaxCornerY from every adjacent cliff flag — own chunk first,
-        // then the 8 neighbor chunks that can touch any of our 17×17 corners.
-        // A flag at tile (lx, lz) raises its upper-platform corners; each
-        // tile renders a corner only if its own column >= the hoisted value,
-        // so sharing the max is safe and lets diagonal lower tiles stay at
-        // natural heights (no spike → no hole).
-        BumpMaxCornersFromChunk(snap, tc, 0, 0, s);
-        if (nx != null)    BumpMaxCornersFromChunk(snap, nx,   -s, 0, s);
-        if (nz != null)    BumpMaxCornersFromChunk(snap, nz,    0,-s, s);
-        if (px != null)    BumpMaxCornersFromChunk(snap, px,    s, 0, s);
-        if (pz != null)    BumpMaxCornersFromChunk(snap, pz,    0, s, s);
-        if (nxnz != null)  BumpMaxCornersFromChunk(snap, nxnz, -s,-s, s);
-        if (nxpz != null)  BumpMaxCornersFromChunk(snap, nxpz, -s, s, s);
-        if (pxnz != null)  BumpMaxCornersFromChunk(snap, pxnz,  s,-s, s);
-        if (pxz != null)   BumpMaxCornersFromChunk(snap, pxz,   s, s, s);
-
         return snap;
-    }
-
-    private static void BumpMaxCornersFromChunk(TerrainSnapshot snap, TerrainChunk src, int dx, int dz, int s)
-    {
-        for (var lx = 0; lx < s; lx++)
-        for (var lz = 0; lz < s; lz++)
-        {
-            var mask = src.CliffMask[lx, lz];
-            if ((mask & TerrainChunk.CliffBitE) != 0)
-            {
-                var upper = src.CliffUpperE[lx, lz];
-                TryBump(snap, lx + 1 + dx, lz     + dz, upper, s);
-                TryBump(snap, lx + 1 + dx, lz + 1 + dz, upper, s);
-            }
-            if ((mask & TerrainChunk.CliffBitS) != 0)
-            {
-                var upper = src.CliffUpperS[lx, lz];
-                TryBump(snap, lx     + dx, lz + 1 + dz, upper, s);
-                TryBump(snap, lx + 1 + dx, lz + 1 + dz, upper, s);
-            }
-        }
-    }
-
-    private static void TryBump(TerrainSnapshot snap, int cx, int cz, short upper, int s)
-    {
-        if ((uint)cx > (uint)s || (uint)cz > (uint)s) return;
-        if (upper > snap.MaxCornerY[cx, cz]) snap.MaxCornerY[cx, cz] = upper;
     }
 
     private TerrainChunk GetOrCreateTerrainChunk(int cx, int cz)
