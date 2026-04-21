@@ -95,9 +95,12 @@ public sealed partial class GridRenderer : Node3D
 
         Profiler.Begin("Classify");
         var cam = GetViewport()?.GetCamera3D();
-        var camPos = cam?.GlobalPosition ?? Vector3.Zero;
-        var camChunkX = Mathf.FloorToInt(camPos.X / (Chunk.Size * TileCoord.TileW));
-        var camChunkZ = Mathf.FloorToInt(camPos.Z / (Chunk.Size * TileCoord.TileW));
+        // Follow the orbit pivot, not the camera transform, so yaw/pitch/zoom
+        // don't thrash the LOD classifier. Only pan (Target move) crosses a
+        // chunk boundary and retriggers rebuilds.
+        var focus = cam is OrbitCamera orbit ? orbit.Target : cam?.GlobalPosition ?? Vector3.Zero;
+        var camChunkX = Mathf.FloorToInt(focus.X / (Chunk.Size * TileCoord.TileW));
+        var camChunkZ = Mathf.FloorToInt(focus.Z / (Chunk.Size * TileCoord.TileW));
 
         var chunkCount = _simHost.Tiles.ChunkCount;
         var cacheHit = _cachePerChunkTier != null
