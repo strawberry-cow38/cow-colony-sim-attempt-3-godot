@@ -8,13 +8,14 @@ public static class WorldGen
     public const int DefaultMaxHeight = 103;
     public const float DefaultFrequency = 0.02f;
 
-    // Plateau terrace for mountain peaks. Above PlateauStartTiles the height
-    // snaps to PlateauStepTiles multiples with a short ramp on the top
-    // PlateauRampFrac of each step so successive tiers read as flat-topped
-    // plateaus rather than a smooth dome. Gives buildable tops atop peaks.
-    private const float PlateauStartTiles = 40f;
-    private const float PlateauStepTiles = 10f;
-    private const float PlateauRampFrac = 0.15f;
+    // Mesa: rare, low-frequency mask that clamps height to a flat top only
+    // where the mask exceeds threshold. Scattered buildable plateaus on top
+    // of otherwise jagged mountains — no global staircase terracing, so
+    // default mountains keep the imposing ridged-noise shape.
+    private const float MesaThreshold = 0.72f;
+    private const float MesaBlendBand = 0.10f;
+    private const float MesaMinHeight = 35f;
+    private const float MesaStepTiles = 15f;
 
     // Cubby: shallow flat pocket anywhere on the map. Anywhere the cubby
     // noise exceeds the threshold the local surface is forced to a flat
@@ -69,7 +70,18 @@ public static class WorldGen
                         + (1f - wx) * wz         * h01
                         + wx         * wz         * h11;
 
-                h = Terrace(h);
+                // Mesa pass. Rare low-freq mask — only flat-tops scattered
+                // peaks. Leaves the rest of a mountain cell as natural
+                // jagged ridged noise instead of the old global staircase.
+                var mesaN = (noises.Mesa.GetNoise(x, z) + 1f) * 0.5f;
+                if (mesaN > MesaThreshold && h > MesaMinHeight)
+                {
+                    var over = h - MesaMinHeight;
+                    var band = MathF.Floor(over / MesaStepTiles) * MesaStepTiles;
+                    var mesaTop = MesaMinHeight + band;
+                    var t = Smooth(MathF.Min(1f, (mesaN - MesaThreshold) / MesaBlendBand));
+                    h = h + (mesaTop - h) * t;
+                }
 
                 // Cubby pass. noise in [-1, 1]; above threshold force a flat
                 // depressed plateau. Blend band keeps edges walkable instead
@@ -118,17 +130,4 @@ public static class WorldGen
     }
 
     private static float Smooth(float t) => t * t * (3f - 2f * t);
-
-    private static float Terrace(float h)
-    {
-        if (h <= PlateauStartTiles) return h;
-        var over = h - PlateauStartTiles;
-        var band = MathF.Floor(over / PlateauStepTiles) * PlateauStepTiles;
-        var frac = (over - band) / PlateauStepTiles;
-        var rampStart = 1f - PlateauRampFrac;
-        var ramp = frac <= rampStart
-            ? 0f
-            : Smooth((frac - rampStart) / PlateauRampFrac);
-        return PlateauStartTiles + band + ramp * PlateauStepTiles;
-    }
 }

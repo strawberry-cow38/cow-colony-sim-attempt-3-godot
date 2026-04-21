@@ -44,6 +44,7 @@ public sealed class FeatureNoises
     public readonly FastNoiseLite Mountains;
     public readonly FastNoiseLite Lake;
     public readonly FastNoiseLite Cubby;
+    public readonly FastNoiseLite Mesa;
 
     public FeatureNoises(int seed)
     {
@@ -53,6 +54,8 @@ public sealed class FeatureNoises
         Lake      = Make(seed + 4, 0.030f, 2);
         // Low-frequency mask for flat cubbies / outpost pockets.
         Cubby     = Make(seed + 5, 0.035f, 2);
+        // Even lower-frequency mask for rare mesa tops on mountain peaks.
+        Mesa      = Make(seed + 6, 0.0025f, 2);
     }
 
     private static FastNoiseLite Make(int seed, float freq, int oct)
@@ -80,8 +83,11 @@ public sealed class FeatureNoises
                 var n = Mountains.GetNoise(x, z);
                 var ridged = 1f - System.MathF.Abs(n);
                 ridged *= ridged;
-                // 6..100 raw ridged height — terracing applied post-bilerp.
-                return 6f + ridged * 94f;
+                // Raw range 6..126 — peaks beyond maxHeight clip to a flat
+                // cliff-top naturally, giving imposing silhouettes with no
+                // explicit terrace step. Mesa mask (post-bilerp) handles
+                // scattered mid-height buildable plateaus.
+                return 6f + ridged * 120f;
             }
             case CellFeature.Lake:
                 return 1f + (Lake.GetNoise(x, z) + 1f) * 0.5f * 1.5f;
