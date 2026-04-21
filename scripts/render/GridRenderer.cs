@@ -45,8 +45,10 @@ public sealed partial class GridRenderer : Node3D
     private StandardMaterial3D? _material;
     private Shader? _terrainShader;
     private Texture2D? _grassTex;
+    private ArrayMesh? _g4PatchMesh;
     private ArrayMesh? _g8PatchMesh;
     private ArrayMesh? _g16PatchMesh;
+    private const int G4CellsPerSide = 16;  // 6m per cell at 96m patch (matches CPU step=4)
     private const int G8CellsPerSide = 16;  // 12m per cell at 192m patch
     private const int G16CellsPerSide = 32; // 12m per cell at 384m patch
 
@@ -79,9 +81,11 @@ public sealed partial class GridRenderer : Node3D
             _terrainShader = GD.Load<Shader>("res://scripts/render/shaders/terrain_heightmap.gdshader");
             var g16Width = Group16 * Chunk.Size * TileCoord.TileW;
             var g8Width  = Group8  * Chunk.Size * TileCoord.TileW;
+            var g4Width  = Group4  * Chunk.Size * TileCoord.TileW;
             _g16PatchMesh = GpuTerrain.BuildPatchMesh(G16CellsPerSide, g16Width);
-            // G8 is stepped — matches blocky look of L0/L1/G4 at the tier boundary.
+            // G8 and G4 are stepped — matches blocky look of L0/L1 at tier boundaries.
             _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width);
+            _g4PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G4CellsPerSide, g4Width);
         }
     }
 
@@ -171,15 +175,16 @@ public sealed partial class GridRenderer : Node3D
         Profiler.End("PerChunk");
 
         Profiler.Begin("Groups");
-        UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4, cliffMinDelta: 1);
         if (GpuTerrainEnabled)
         {
-            UpdateGpuGroupSlots(_g8Slots, g8Masks, Group8, lod: 4);
+            UpdateGpuGroupSlots(_g4Slots,  g4Masks,  Group4,  lod: 3);
+            UpdateGpuGroupSlots(_g8Slots,  g8Masks,  Group8,  lod: 4);
             UpdateGpuGroupSlots(_g16Slots, g16Masks, Group16, lod: 5);
         }
         else
         {
-            UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 32, cliffMinDelta: 3);
+            UpdateGroupSlots(_g4Slots,  g4Masks,  Group4,  lod: 3, step: 4,  cliffMinDelta: 1);
+            UpdateGroupSlots(_g8Slots,  g8Masks,  Group8,  lod: 4, step: 32, cliffMinDelta: 3);
             UpdateGroupSlots(_g16Slots, g16Masks, Group16, lod: 5, step: 64, cliffMinDelta: 6);
         }
         Profiler.End("Groups");
@@ -251,7 +256,7 @@ public sealed partial class GridRenderer : Node3D
         while (_completedGpuGroup.TryDequeue(out var pack))
         {
             var (key, groupSize, patch, lod, maskHash) = pack;
-            var table = groupSize == Group16 ? _g16Slots : _g8Slots;
+            var table = groupSize == Group4 ? _g4Slots : groupSize == Group8 ? _g8Slots : _g16Slots;
             if (!table.TryGetValue(key, out var slot)) continue;
             slot.InFlight = false;
             if (patch == null)
@@ -262,13 +267,17 @@ public sealed partial class GridRenderer : Node3D
             {
                 var tex = GpuTerrain.BuildHeightmapTexture(
                     patch.Heights, patch.SizeX, patch.SizeZ, patch.MaxHeightMeters);
-                slot.MeshInstance.Mesh = groupSize == Group8 ? _g8PatchMesh : _g16PatchMesh;
+                slot.MeshInstance.Mesh = groupSize == Group4 ? _g4PatchMesh
+                    : groupSize == Group8 ? _g8PatchMesh
+                    : _g16PatchMesh;
                 slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex);
             }
             slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = patch?.LodLevel ?? lod;
-            Profiler.IncRate(groupSize == Group8 ? "G8gpu up/s" : "G16gpu up/s");
+            Profiler.IncRate(groupSize == Group4 ? "G4gpu up/s"
+                : groupSize == Group8 ? "G8gpu up/s"
+                : "G16gpu up/s");
         }
     }
 
@@ -409,7 +418,9 @@ public sealed partial class GridRenderer : Node3D
         Dictionary<TilePos, List<TilePos>> masks,
         int groupSize, int lod)
     {
-        var patchMesh = groupSize == Group8 ? _g8PatchMesh! : _g16PatchMesh!;
+        var patchMesh = groupSize == Group4 ? _g4PatchMesh!
+            : groupSize == Group8 ? _g8PatchMesh!
+            : _g16PatchMesh!;
         foreach (var (groupKey, chunkKeys) in masks)
         {
             if (!table.TryGetValue(groupKey, out var slot))
@@ -462,7 +473,9 @@ public sealed partial class GridRenderer : Node3D
                 var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 var patch = _mesher.BuildGroupHeightmapPatch(entries, size, lodCaptured);
                 var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                Profiler.RecordMs(size == Group8 ? "Build G8 GPU" : "Build G16 GPU", ms);
+                Profiler.RecordMs(size == Group4 ? "Build G4 GPU"
+                    : size == Group8 ? "Build G8 GPU"
+                    : "Build G16 GPU", ms);
                 _completedGpuGroup.Enqueue((key, size, patch, lodCaptured, maskHashCaptured));
             });
         }
