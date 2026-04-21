@@ -39,6 +39,49 @@ public sealed class TileWorld
         foreach (var kv in next) _cellStates[kv.Key] = kv.Value;
     }
 
+    /// <summary>
+    /// Remove every chunk belonging to the cell and return them so the caller
+    /// can persist them. Returns null if the cell has no chunks.
+    /// </summary>
+    public List<(TilePos ChunkKey, Chunk Chunk)>? TryEvictCell(CellKey key)
+    {
+        if (!_chunksByCell.TryGetValue(key, out var list) || list.Count == 0)
+            return null;
+        var evicted = new List<(TilePos, Chunk)>(list.Count);
+        foreach (var ck in list)
+        {
+            if (_chunks.TryGetValue(ck, out var chunk))
+            {
+                evicted.Add((ck, chunk));
+                _chunks.Remove(ck);
+            }
+        }
+        _chunksByCell.Remove(key);
+        return evicted;
+    }
+
+    /// <summary>
+    /// Reinstate chunks that were previously evicted. Throws if the cell
+    /// already holds chunks in memory — callers must evict first.
+    /// </summary>
+    public void InstallCell(CellKey key, IReadOnlyList<(TilePos ChunkKey, Chunk Chunk)> chunks)
+    {
+        if (_chunksByCell.ContainsKey(key))
+            throw new InvalidOperationException($"cell {key} still has in-memory chunks");
+        if (chunks.Count == 0) return;
+        var list = new List<TilePos>(chunks.Count);
+        foreach (var (ck, chunk) in chunks)
+        {
+            _chunks[ck] = chunk;
+            list.Add(ck);
+        }
+        _chunksByCell[key] = list;
+    }
+
+    public bool CellHasChunks(CellKey key) => _chunksByCell.ContainsKey(key);
+
+    public IEnumerable<CellKey> InMemoryCells => _chunksByCell.Keys;
+
     public Tile Get(TilePos pos)
     {
         var (chunkKey, lx, ly, lz) = Split(pos);

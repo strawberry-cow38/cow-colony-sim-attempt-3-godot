@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Godot;
 using fennecs;
 using CowColonySim.Sim;
@@ -19,12 +20,18 @@ public partial class SimHost : Node
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
 	public TimeOfDaySystem TimeOfDay { get; } = new();
+	public CellStore CellStore { get; }
+	public CellPagingSystem Paging { get; }
 
 	private readonly Random _rng = new(WorldSeed);
 
 	public SimHost()
 	{
 		Loop = new SimLoop(Step);
+		var cellsDir = Path.Combine(OS.GetUserDataDir(), "cells");
+		WipeDir(cellsDir); // pre-alpha: worldgen may change between runs, don't reuse stale cells
+		CellStore = new CellStore(cellsDir);
+		Paging = new CellPagingSystem(CellStore);
 	}
 
 	public override void _Ready()
@@ -34,7 +41,7 @@ public partial class SimHost : Node
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
 		TimeOfDay.SetTicks((long)(SimConstants.TicksPerDay * 0.30f));
-		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
+		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}, cellsDir={CellStore.PathFor(new CellKey(0, 0))}.");
 	}
 
 	public override void _Process(double delta)
@@ -49,6 +56,19 @@ public partial class SimHost : Node
 		PathPlanSystem.Step(World, Tiles);
 		PathFollowSystem.Step(World, (float)SimConstants.SimDt);
 		if (tick % SimConstants.SimHz == 0) ChunkTierSystem.Step(World, Tiles);
+		Paging.Step(Tiles, tick);
+	}
+
+	private static void WipeDir(string dir)
+	{
+		try
+		{
+			if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+		}
+		catch (Exception e)
+		{
+			GD.PushWarning($"SimHost: failed to wipe {dir}: {e.Message}");
+		}
 	}
 
 	private void SeedColonyClaim()

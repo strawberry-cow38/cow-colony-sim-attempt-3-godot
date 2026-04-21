@@ -41,6 +41,29 @@ public sealed class Chunk
         return new ChunkSnapshot(copy, Revision);
     }
 
+    /// <summary>
+    /// Write each tile's <see cref="TileKind"/> byte to <paramref name="dst"/>
+    /// starting at <paramref name="offset"/>. Tile is currently 1 byte so the
+    /// format is just the raw Kind byte per tile. Expand with extra streams
+    /// when Tile grows.
+    /// </summary>
+    public void WriteTileKindsTo(byte[] dst, int offset)
+    {
+        if (dst.Length < offset + Volume)
+            throw new ArgumentException("destination buffer too small");
+        for (var i = 0; i < Volume; i++) dst[offset + i] = (byte)_tiles[i].Kind;
+    }
+
+    public static Chunk FromSerialized(ReadOnlySpan<byte> kinds, int revision)
+    {
+        if (kinds.Length != Volume)
+            throw new ArgumentException($"expected {Volume} bytes, got {kinds.Length}");
+        var c = new Chunk();
+        for (var i = 0; i < Volume; i++) c._tiles[i] = new Tile((TileKind)kinds[i]);
+        c.Revision = revision;
+        return c;
+    }
+
     public static int IndexOf(int lx, int ly, int lz) => Index(lx, ly, lz);
 
     private static int Index(int lx, int ly, int lz)
