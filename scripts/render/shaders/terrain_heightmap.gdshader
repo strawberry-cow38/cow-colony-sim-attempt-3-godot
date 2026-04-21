@@ -42,7 +42,19 @@ void fragment() {
 	vec3 dx = dFdx(VERTEX);
 	vec3 dy = dFdy(VERTEX);
 	NORMAL = normalize(cross(dy, dx));
-	vec4 tex = texture(albedo_tex, UV);
+
+	// Atlas is 4×4 cells (see TileAtlas.cs); naive UV tiling sweeps across
+	// grass → dirt → rock → sand every meter. Confine sampling to the grass
+	// cell at (col=0, row=0) and repeat within it per-tile. textureGrad with
+	// the unwrapped UV derivatives keeps mipmap selection sane across the
+	// fract() boundary.
+	const float inset = 8.0 / 2048.0;
+	const float cell_span = 0.25 - 2.0 * inset;
+	vec2 tile_uv = fract(UV);
+	vec2 atlas_uv = vec2(inset) + tile_uv * cell_span;
+	vec2 du = dFdx(UV) * cell_span;
+	vec2 dv = dFdy(UV) * cell_span;
+	vec4 tex = textureGrad(albedo_tex, atlas_uv, du, dv);
 	ALBEDO = tex.rgb * tint.rgb;
 	ROUGHNESS = 0.95;
 }
