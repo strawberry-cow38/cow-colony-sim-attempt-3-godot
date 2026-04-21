@@ -159,14 +159,21 @@ public sealed partial class GridRenderer : Node3D
 
                     var g4Key  = GroupKey(ck, Group4);
                     var g8Key  = GroupKey(ck, Group8);
-                    long g4Sq  = GroupMinDistSq(g4Key, Group4, camChunkX, camChunkZ);
-                    long g8Sq  = GroupMinDistSq(g8Key, Group8, camChunkX, camChunkZ);
+                    long g4MinSq  = GroupMinDistSq(g4Key, Group4, camChunkX, camChunkZ);
+                    long g4MaxSq  = GroupMaxDistSq(g4Key, Group4, camChunkX, camChunkZ);
+                    long g8MinSq  = GroupMinDistSq(g8Key, Group8, camChunkX, camChunkZ);
+                    long g8MaxSq  = GroupMaxDistSq(g8Key, Group8, camChunkX, camChunkZ);
 
                     if (dSq <= tier1Sq)
                         perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
-                    if (g4Sq > tier1InnerSq && g4Sq <= tier3Sq)
+                    // Group needed if ANY chunk in it falls past the tier's fade-in
+                    // edge (use MAX dist); cull if WHOLLY past the coarse tier's end
+                    // (use MIN dist). Using MIN for both caused straddling groups
+                    // (near corner in close zone, far corner past tier1) to be
+                    // skipped entirely, leaving uncovered holes between L1 and G4.
+                    if (g4MaxSq > tier1InnerSq && g4MinSq <= tier3Sq)
                         AddToBucket(g4Masks, g4Key, ck);
-                    if (g8Sq > tier3InnerSq)
+                    if (g8MaxSq > tier3InnerSq)
                         AddToBucket(g8Masks, g8Key, ck);
                 }
             }
@@ -618,14 +625,17 @@ public sealed partial class GridRenderer : Node3D
                 mi.VisibilityRangeEndMargin = fadeMargin;
                 break;
             case 3:
-                mi.VisibilityRangeBegin = tier1m - fadeMargin;
-                mi.VisibilityRangeBeginMargin = fadeMargin;
+                // No VisibilityRangeBegin: Godot measures the range from camera
+                // to the mesh instance ORIGIN (group corner), not the AABB, so
+                // applying Begin hides the whole patch whenever the near corner
+                // is close — even when the far corner is deep past tier1 with
+                // no near-tier mesh to cover. L1 overdraws G4 in the close zone.
                 mi.VisibilityRangeEnd = tier3m;
                 mi.VisibilityRangeEndMargin = fadeMargin;
                 break;
             case 4:
-                mi.VisibilityRangeBegin = tier3m - fadeMargin;
-                mi.VisibilityRangeBeginMargin = fadeMargin;
+                // Same origin-vs-AABB issue as case 3; G8 stays visible up to
+                // MaxChunkDistance and G4 overdraws it in the close zone.
                 break;
         }
     }
@@ -657,6 +667,22 @@ public sealed partial class GridRenderer : Node3D
         long dx = System.Math.Max(0, System.Math.Max(camX - xMax, xMin - camX));
         long dz = System.Math.Max(0, System.Math.Max(camZ - zMax, zMin - camZ));
         return dx * dx + dz * dz;
+    }
+
+    // Max euclidean-squared distance (chunks²) from camera to any corner of
+    // the group's AABB. Used to decide if ANY chunk in the group falls past a
+    // tier boundary — straddling groups (near corner close, far corner past
+    // tier1) must still emit their coarse mesh to cover the far chunks that
+    // no near-tier mesh reaches.
+    private static long GroupMaxDistSq(TilePos groupKey, int size, int camX, int camZ)
+    {
+        var xMin = groupKey.X;
+        var xMax = groupKey.X + size - 1;
+        var zMin = groupKey.Z;
+        var zMax = groupKey.Z + size - 1;
+        long dxMax = System.Math.Max(System.Math.Abs((long)(camX - xMin)), System.Math.Abs((long)(camX - xMax)));
+        long dzMax = System.Math.Max(System.Math.Abs((long)(camZ - zMin)), System.Math.Abs((long)(camZ - zMax)));
+        return dxMax * dxMax + dzMax * dzMax;
     }
 
     private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);
