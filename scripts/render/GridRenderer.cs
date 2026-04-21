@@ -150,15 +150,19 @@ public sealed partial class GridRenderer : Node3D
             long maxDistSq = (long)MaxChunkDistance * MaxChunkDistance;
             long tier0Sq = (long)Tier0Range * Tier0Range;
             long tier1Sq = (long)Tier1Range * Tier1Range;
-            long tier3Sq = (long)Tier3Range * Tier3Range;
             // Overlap bands. L1/G4 boundary: G4 extends 1 chunk INTO L1
             // territory so it can fade in where L1 covers it (tier1InnerSq).
-            // G4/G8 boundary: G4 extends 1 chunk PAST tier3 into G8 territory
-            // (tier3OuterSq) so G4's fade-out and G8's fade-in crossfade on
-            // the G8 side of the boundary. Band widths (1 chunk) must match
-            // the fade windows BuildTerrainMaterial hands the shader.
+            // G4/G8 boundary: G4's fade_out covers [tier3, tier3+1 chunk], so
+            // Classify extends G4 groups a few chunks FURTHER (Prewarm) to let
+            // the async mesh builder finish before the camera pans into the
+            // fade band — otherwise a new G4 group entering range renders a
+            // few frames late and leaves a visible "pop" where G8 alone was
+            // still in its fade-in partial state. Same trick on G8's far-side
+            // entry so G8 is built while it's still inside tier3 interior.
+            const int Prewarm = 3;
             long tier1InnerSq = (long)(Tier1Range - 1) * (Tier1Range - 1);
-            long tier3OuterSq = (long)(Tier3Range + 1) * (Tier3Range + 1);
+            long tier3OuterPrewarmSq = (long)(Tier3Range + Prewarm) * (Tier3Range + Prewarm);
+            long tier3InnerPrewarmSq = (long)(Tier3Range - Prewarm) * (Tier3Range - Prewarm);
             for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
             for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
             {
@@ -186,9 +190,9 @@ public sealed partial class GridRenderer : Node3D
                     // (use MIN dist). Using MIN for both caused straddling groups
                     // (near corner in close zone, far corner past tier1) to be
                     // skipped entirely, leaving uncovered holes between L1 and G4.
-                    if (g4MaxSq > tier1InnerSq && g4MinSq <= tier3OuterSq)
+                    if (g4MaxSq > tier1InnerSq && g4MinSq <= tier3OuterPrewarmSq)
                         AddToBucket(g4Masks, g4Key, ck);
-                    if (g8MaxSq > tier3Sq)
+                    if (g8MaxSq > tier3InnerPrewarmSq)
                         AddToBucket(g8Masks, g8Key, ck);
                 }
             }
