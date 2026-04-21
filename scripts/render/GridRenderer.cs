@@ -27,12 +27,12 @@ public sealed partial class GridRenderer : Node3D
     public static int MaxChunkDistance { get; set; } = 64;
 
     public static bool GpuTerrainEnabled = true;
-    // P1b A/B: hide legacy voxel terrain (L0/L1 per-chunk slots) so the
-    // smooth corner-heightmap mesh renders alone. Default true so the world
-    // still renders until the vertex mesher fully replaces the voxel top
-    // surface in P1c. G4/G8 far tiers are untouched — they cover distance
-    // the smooth mesher doesn't run on yet.
-    public static bool ShowVoxelTerrain = true;
+    // Diagnostic A/B toggle for the old voxel/stepped terrain at L0+L1.
+    // Default off post-P1d: voxel L0 and stepped L1 no longer emit
+    // Floor/Sand/Water (HeightmapTerrainMesher owns the ground), so flipping
+    // this on mostly re-reveals rock columns that terrain obscured. G4/G8
+    // far tiers are untouched — they still emit terrain for distance cover.
+    public static bool ShowVoxelTerrain = false;
 
     // Every non-LIVE tier renders this far below its true Y. Keeps coarse
     // tiers from Z-fighting with the L0 voxel mesh across the fade band

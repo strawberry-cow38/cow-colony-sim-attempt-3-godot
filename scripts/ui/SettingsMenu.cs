@@ -51,7 +51,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private bool _fxaaEnabled = true;
     private bool _vsyncEnabled = false;
     private int _renderDistance = 128;
-    private bool _legacyTerrainVisible = true;
+    private bool _legacyTerrainVisible = false;
 
     public override void _Ready()
     {
@@ -225,7 +225,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _fxaaEnabled = (bool)cfg.GetValue("render", "fxaa", true);
         _vsyncEnabled = (bool)cfg.GetValue("render", "vsync", false);
         _renderDistance = Mathf.Clamp((int)cfg.GetValue("world", "render_distance", 128), 8, 256);
-        _legacyTerrainVisible = (bool)cfg.GetValue("world", "legacy_terrain", true);
+        _legacyTerrainVisible = (bool)cfg.GetValue("world", "legacy_terrain", false);
     }
 
     private void Save()

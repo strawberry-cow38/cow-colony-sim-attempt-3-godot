@@ -49,7 +49,9 @@ public sealed class NaiveChunkMesher : IChunkMesher
             for (var ly = size - 1; ly >= 0; ly--)
             {
                 var t = snapshot[lx, ly, lz];
-                if (!t.IsEmpty) { top = ly; kind = t.Kind; break; }
+                if (t.IsEmpty) continue;
+                if (IsTerrainKind(t.Kind)) continue;
+                top = ly; kind = t.Kind; break;
             }
             colHeight[lx, lz] = top;
             colKind[lx, lz] = kind;
@@ -83,12 +85,18 @@ public sealed class NaiveChunkMesher : IChunkMesher
             var top = -1;
             for (var ly = size - 1; ly >= 0; ly--)
             {
-                if (!s[lx, ly, lz].IsEmpty) { top = ly; break; }
+                var t = s[lx, ly, lz];
+                if (t.IsEmpty) continue;
+                if (IsTerrainKind(t.Kind)) continue;
+                top = ly; break;
             }
             arr[i] = top;
         }
         return arr;
     }
+
+    private static bool IsTerrainKind(TileKind k)
+        => k == TileKind.Floor || k == TileKind.Sand || k == TileKind.Water;
 
     public readonly struct GroupChunkEntry
     {
@@ -397,7 +405,9 @@ public sealed class NaiveChunkMesher : IChunkMesher
             for (var ly = size - 1; ly >= 0; ly--)
             {
                 var t = snapshot[lx, ly, lz];
-                if (!t.IsEmpty) { top = ly; kind = t.Kind; break; }
+                if (t.IsEmpty) continue;
+                if (IsTerrainKind(t.Kind)) continue;
+                top = ly; kind = t.Kind; break;
             }
             colHeight[lx, lz] = top;
             colKind[lx, lz] = kind;
@@ -552,7 +562,11 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 if (hi < 0) { inner++; continue; }
 
                 var (hn, hasN) = QueryNeighbor(dsHeight, cellsX, cellsZ, cx, cz, dirX, dirZ, bPosX, bNegX, bPosZ, bNegZ, step);
-                if (!hasN || hi - hn < cliffMinDelta) { inner++; continue; }
+                // Skip cliffs toward empty-looking neighbors. Post-P1d, terrain
+                // columns report hn=-1 (Floor/Sand/Water stripped), so a wall
+                // adjacent to grass would otherwise emit a giant rock-wall
+                // down to y=0 that the vertex terrain already covers visually.
+                if (!hasN || hn < 0 || hi - hn < cliffMinDelta) { inner++; continue; }
 
                 var kind = dsKind[cx, cz];
                 var runStart = inner;
