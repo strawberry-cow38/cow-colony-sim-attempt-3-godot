@@ -50,7 +50,7 @@ public sealed class FeatureNoises
     {
         Plains    = Make(seed + 1, 0.020f, 2);
         Hills     = Make(seed + 2, 0.010f, 4);
-        Mountains = Make(seed + 3, 0.006f, 5);
+        Mountains = Make(seed + 3, 0.003f, 5);
         Lake      = Make(seed + 4, 0.030f, 2);
         // Low-frequency mask for flat cubbies / outpost pockets.
         Cubby     = Make(seed + 5, 0.035f, 2);
@@ -81,13 +81,16 @@ public sealed class FeatureNoises
             case CellFeature.Mountains:
             {
                 var n = Mountains.GetNoise(x, z);
-                var ridged = 1f - System.MathF.Abs(n);
-                ridged *= ridged;
-                // Raw range 6..126 — peaks beyond maxHeight clip to a flat
-                // cliff-top naturally, giving imposing silhouettes with no
-                // explicit terrace step. Mesa mask (post-bilerp) handles
+                // Broad FBm — not ridged. Ridged noise produces thin ridge
+                // lines where |n|≈0, which reads as noodle-thin mountains.
+                // Plain FBm squared gives chunky domed masses with wide
+                // footprints — imposing "blob" mountains, not ridge lines.
+                var n01 = (n + 1f) * 0.5f;
+                var shaped = n01 * n01;
+                // Raw range 6..126 — peaks beyond maxHeight=103 clip to a
+                // flat cliff-top naturally. Mesa mask (post-bilerp) handles
                 // scattered mid-height buildable plateaus.
-                return 6f + ridged * 120f;
+                return 6f + shaped * 120f;
             }
             case CellFeature.Lake:
                 return 1f + (Lake.GetNoise(x, z) + 1f) * 0.5f * 1.5f;
