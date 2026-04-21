@@ -98,4 +98,32 @@ public class CellTests
             if (CellGating.ShouldStep(ChunkState.Ambient, t)) hits++;
         Assert.Equal(3, hits);
     }
+
+    [Fact]
+    public void ChunksByCell_Indexes_Chunks_On_Create()
+    {
+        var tiles = new TileWorld();
+        tiles.Set(new TilePos(0, 0, 0), new Tile(TileKind.Solid));
+        tiles.Set(new TilePos(Cell.SizeTiles, 0, 0), new Tile(TileKind.Solid));
+
+        var cell00 = tiles.GetChunksInCell(new CellKey(0, 0));
+        var cell10 = tiles.GetChunksInCell(new CellKey(1, 0));
+        Assert.NotNull(cell00);
+        Assert.NotNull(cell10);
+        Assert.Single(cell00);
+        Assert.Single(cell10);
+        Assert.Null(tiles.GetChunksInCell(new CellKey(9, 9)));
+    }
+
+    [Fact]
+    public void ChunksByCell_Groups_Multiple_Chunks_In_Same_Cell()
+    {
+        var tiles = new TileWorld();
+        for (var cx = 0; cx < Cell.SizeChunks; cx++)
+            tiles.Set(new TilePos(cx * Chunk.Size, 0, 0), new Tile(TileKind.Solid));
+
+        var cell = tiles.GetChunksInCell(new CellKey(0, 0));
+        Assert.NotNull(cell);
+        Assert.Equal(Cell.SizeChunks, cell.Count);
+    }
 }

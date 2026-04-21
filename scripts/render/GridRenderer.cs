@@ -86,28 +86,39 @@ public sealed partial class GridRenderer : Node3D
         var g16Masks = new Dictionary<TilePos, List<TilePos>>();
         var perChunkTier = new Dictionary<TilePos, int>();
 
-        foreach (var kv in _simHost.Tiles.EnumerateChunks())
+        // Cell-scoped iteration: skip any cell whose XZ column is fully
+        // beyond MaxChunkDistance instead of walking every chunk in the world.
+        var camCellX = FloorDiv(camChunkX, Cell.SizeChunks);
+        var camCellZ = FloorDiv(camChunkZ, Cell.SizeChunks);
+        var cellRange = (MaxChunkDistance + Cell.SizeChunks - 1) / Cell.SizeChunks;
+        for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
+        for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
         {
-            var ck = kv.Key;
-            var dx = System.Math.Abs(ck.X - camChunkX);
-            var dz = System.Math.Abs(ck.Z - camChunkZ);
-            var d = System.Math.Max(dx, dz);
-            if (d > MaxChunkDistance) continue;
-            if (d <= Tier1Range)
+            var chunks = _simHost.Tiles.GetChunksInCell(new CellKey(cx, cz));
+            if (chunks == null) continue;
+            for (var i = 0; i < chunks.Count; i++)
             {
-                perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
-            }
-            else if (d <= Tier3Range)
-            {
-                AddToBucket(g4Masks, GroupKey(ck, Group4), ck);
-            }
-            else if (d <= Tier4Range)
-            {
-                AddToBucket(g8Masks, GroupKey(ck, Group8), ck);
-            }
-            else
-            {
-                AddToBucket(g16Masks, GroupKey(ck, Group16), ck);
+                var ck = chunks[i];
+                var dx = System.Math.Abs(ck.X - camChunkX);
+                var dz = System.Math.Abs(ck.Z - camChunkZ);
+                var d = System.Math.Max(dx, dz);
+                if (d > MaxChunkDistance) continue;
+                if (d <= Tier1Range)
+                {
+                    perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
+                }
+                else if (d <= Tier3Range)
+                {
+                    AddToBucket(g4Masks, GroupKey(ck, Group4), ck);
+                }
+                else if (d <= Tier4Range)
+                {
+                    AddToBucket(g8Masks, GroupKey(ck, Group8), ck);
+                }
+                else
+                {
+                    AddToBucket(g16Masks, GroupKey(ck, Group16), ck);
+                }
             }
         }
         Profiler.End("Classify");

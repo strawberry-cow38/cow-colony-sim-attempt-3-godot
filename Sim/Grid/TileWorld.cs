@@ -5,10 +5,15 @@ public sealed class TileWorld
     private readonly Dictionary<TilePos, Chunk> _chunks = new();
     private readonly Dictionary<TilePos, ChunkState> _chunkStates = new();
     private readonly Dictionary<CellKey, ChunkState> _cellStates = new();
+    private readonly Dictionary<CellKey, List<TilePos>> _chunksByCell = new();
 
     public int ChunkCount => _chunks.Count;
 
     public IEnumerable<KeyValuePair<TilePos, Chunk>> EnumerateChunks() => _chunks;
+
+    /// <summary>Chunk keys whose XZ column falls inside the cell. Null if none.</summary>
+    public IReadOnlyList<TilePos>? GetChunksInCell(CellKey key)
+        => _chunksByCell.TryGetValue(key, out var list) ? list : null;
 
     public Chunk? GetChunkOrNull(TilePos chunkKey) => _chunks.TryGetValue(chunkKey, out var c) ? c : null;
 
@@ -48,6 +53,13 @@ public sealed class TileWorld
             if (tile.IsEmpty) return;
             chunk = new Chunk();
             _chunks.Add(chunkKey, chunk);
+            var cellKey = Cell.FromChunk(chunkKey);
+            if (!_chunksByCell.TryGetValue(cellKey, out var list))
+            {
+                list = new List<TilePos>(4);
+                _chunksByCell[cellKey] = list;
+            }
+            list.Add(chunkKey);
         }
         chunk[lx, ly, lz] = tile;
     }
