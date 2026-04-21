@@ -39,12 +39,21 @@ public sealed partial class GridRenderer : Node3D
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g4Slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g8Slots = new();
+    private readonly Dictionary<(int cx, int cz), TerrainRenderSlot> _terrainSlots = new();
 
     private readonly ConcurrentQueue<(TilePos Key, MeshBuildResult? Result, int Lod)> _completedChunk = new();
     private readonly ConcurrentQueue<(TilePos Key, int GroupSize, MeshBuildResult? Result, int Lod, long MaskHash)> _completedGroup = new();
     private readonly ConcurrentQueue<(TilePos Key, int GroupSize, NaiveChunkMesher.HeightmapPatch? Patch, int Lod, long MaskHash)> _completedGpuGroup = new();
+    private readonly ConcurrentQueue<((int cx, int cz) Key, MeshBuildResult? Result, long RevHash)> _completedTerrain = new();
 
     private readonly NaiveChunkMesher _mesher = new();
+    private readonly HeightmapTerrainMesher _terrainMesher = new();
+
+    // Tiny Y offset so the new corner-heightmap mesh renders just above the
+    // L0 voxel tops during the P1b A/B — lets master eyeball smooth slopes
+    // against stepped cubes. Drops out when the voxel mesher stops emitting
+    // terrain kinds in P1c.
+    private const float TerrainYBias = 0.02f;
 
     private SimHost? _simHost;
     private StandardMaterial3D? _material;
@@ -105,6 +114,7 @@ public sealed partial class GridRenderer : Node3D
         _frameDispatchChunk = 0;
         _frameDispatchG4 = 0;
         _frameDispatchG8 = 0;
+        _frameDispatchTerrain = 0;
 
         Profiler.Begin("Drain");
         DrainCompleted();
@@ -230,6 +240,10 @@ public sealed partial class GridRenderer : Node3D
         UpdatePerChunkSlots(perChunkTier);
         Profiler.End("PerChunk");
 
+        Profiler.Begin("Terrain");
+        UpdateTerrainSlots(perChunkTier);
+        Profiler.End("Terrain");
+
         Profiler.Begin("Groups");
         if (GpuTerrainEnabled)
         {
@@ -246,6 +260,7 @@ public sealed partial class GridRenderer : Node3D
         Profiler.SetCounter("L0+L1 slots", _slots.Count);
         Profiler.SetCounter("G4 slots", _g4Slots.Count);
         Profiler.SetCounter("G8 slots", _g8Slots.Count);
+        Profiler.SetCounter("Terrain slots", _terrainSlots.Count);
         Profiler.SetCounter("InFlight", CountInFlight());
 
         long l0 = 0, l1 = 0;
@@ -276,6 +291,7 @@ public sealed partial class GridRenderer : Node3D
         foreach (var kv in _slots) if (kv.Value.InFlight) n++;
         foreach (var kv in _g4Slots) if (kv.Value.InFlight) n++;
         foreach (var kv in _g8Slots) if (kv.Value.InFlight) n++;
+        foreach (var kv in _terrainSlots) if (kv.Value.InFlight) n++;
         return n;
     }
 
@@ -285,13 +301,16 @@ public sealed partial class GridRenderer : Node3D
     // the pan stays smooth — leftover work surfaces next frame.
     private const int DrainChunkBudget = 4;
     private const int DrainGroupBudget = 2;
+    private const int DrainTerrainBudget = 4;
     private const int DispatchChunkBudget = 4;
     // Per-group-size budget so a G4 burst can't starve G8 (or vice versa)
     // when both need rebuilds on the same pan.
     private const int DispatchGroupBudget = 2;
+    private const int DispatchTerrainBudget = 4;
     private int _frameDispatchChunk;
     private int _frameDispatchG4;
     private int _frameDispatchG8;
+    private int _frameDispatchTerrain;
 
     private void DrainCompleted()
     {
@@ -352,6 +371,17 @@ public sealed partial class GridRenderer : Node3D
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = patch?.LodLevel ?? lod;
             Profiler.IncRate(groupSize == Group4 ? "G4gpu up/s" : "G8gpu up/s");
+            drained++;
+        }
+        drained = 0;
+        while (drained < DrainTerrainBudget && _completedTerrain.TryDequeue(out var pack))
+        {
+            var (key, result, revHash) = pack;
+            if (!_terrainSlots.TryGetValue(key, out var slot)) continue;
+            slot.InFlight = false;
+            slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
+            slot.UploadedRevision = revHash;
+            Profiler.IncRate("Terrain up/s");
             drained++;
         }
     }
@@ -430,6 +460,81 @@ public sealed partial class GridRenderer : Node3D
         {
             if (!active.Contains(kv.Key)) kv.Value.MeshInstance.Visible = false;
         }
+    }
+
+    private void UpdateTerrainSlots(Dictionary<TilePos, int> perChunkTier)
+    {
+        var mutationTick = _simHost!.Tiles.MutationTick;
+        var active = new HashSet<(int cx, int cz)>();
+        // perChunkTier keys include Y layers; terrain is per (cx, cz). Dedupe
+        // before dispatching so a stack of 3 vertical voxel chunks doesn't
+        // request the same terrain mesh 3×.
+        foreach (var kv in perChunkTier)
+        {
+            var key = (kv.Key.X, kv.Key.Z);
+            if (!active.Add(key)) continue;
+            var tc = _simHost!.Tiles.GetTerrainChunkOrNull(key.Item1, key.Item2);
+            if (tc == null) continue;
+
+            if (!_terrainSlots.TryGetValue(key, out var slot))
+            {
+                slot = new TerrainRenderSlot { MeshInstance = BuildTerrainInstance() };
+                AddChild(slot.MeshInstance);
+                _terrainSlots[key] = slot;
+            }
+            slot.MeshInstance.Visible = true;
+            if (slot.InFlight) continue;
+            if (slot.LastCheckedMutationTick == mutationTick) continue;
+
+            // Seam neighbors feed the +X/+Z/+XZ corner rows; a neighbor edit
+            // shifts our visible seam, so fold their revisions in too.
+            var tPx  = _simHost!.Tiles.GetTerrainChunkOrNull(key.Item1 + 1, key.Item2);
+            var tPz  = _simHost!.Tiles.GetTerrainChunkOrNull(key.Item1,     key.Item2 + 1);
+            var tPxz = _simHost!.Tiles.GetTerrainChunkOrNull(key.Item1 + 1, key.Item2 + 1);
+            long revHash = tc.Revision
+                + (tPx?.Revision ?? 0)
+                + (tPz?.Revision ?? 0)
+                + (tPxz?.Revision ?? 0);
+            if (slot.UploadedRevision == revHash)
+            {
+                slot.LastCheckedMutationTick = mutationTick;
+                continue;
+            }
+            if (_frameDispatchTerrain >= DispatchTerrainBudget) continue;
+
+            var snap = _simHost!.Tiles.SnapshotTerrain(key.Item1, key.Item2);
+            if (snap == null) continue;
+            slot.InFlight = true;
+            slot.RequestedRevision = revHash;
+            slot.LastCheckedMutationTick = mutationTick;
+            _frameDispatchTerrain++;
+            var keyCaptured = key;
+            var revCaptured = revHash;
+            Task.Run(() =>
+            {
+                var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                var r = _terrainMesher.Build(snap);
+                var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Profiler.RecordMs("Build Terrain", ms);
+                _completedTerrain.Enqueue((keyCaptured, r, revCaptured));
+            });
+        }
+        foreach (var kv in _terrainSlots)
+        {
+            if (!active.Contains(kv.Key)) kv.Value.MeshInstance.Visible = false;
+        }
+    }
+
+    private MeshInstance3D BuildTerrainInstance()
+    {
+        // HeightmapTerrainMesher emits world-space vertices (chunkBaseX/Z in
+        // the mesher), so the MeshInstance sits at origin + Y bias only.
+        return new MeshInstance3D
+        {
+            Position = new Vector3(0f, TerrainYBias, 0f),
+            MaterialOverride = _material,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        };
     }
 
     private void UpdateGroupSlots(
@@ -813,9 +918,11 @@ public sealed partial class GridRenderer : Node3D
         foreach (var kv in _slots) kv.Value.MeshInstance.QueueFree();
         foreach (var kv in _g4Slots) kv.Value.MeshInstance.QueueFree();
         foreach (var kv in _g8Slots) kv.Value.MeshInstance.QueueFree();
+        foreach (var kv in _terrainSlots) kv.Value.MeshInstance.QueueFree();
         _slots.Clear();
         _g4Slots.Clear();
         _g8Slots.Clear();
+        _terrainSlots.Clear();
         // Drop the Classify cache so the next frame re-scans the new chunk set.
         _cacheCamChunkX = int.MinValue;
         _cacheChunkCount = -1;
@@ -844,6 +951,15 @@ public sealed partial class GridRenderer : Node3D
         public long RequestedRevision = -1;
         public long UploadedMaskHash;
         public int CurrentLod = -1;
+        public bool InFlight;
+        public long LastCheckedMutationTick = -1;
+    }
+
+    private sealed class TerrainRenderSlot
+    {
+        public MeshInstance3D MeshInstance = null!;
+        public long UploadedRevision = -1;
+        public long RequestedRevision = -1;
         public bool InFlight;
         public long LastCheckedMutationTick = -1;
     }
