@@ -1,23 +1,40 @@
 namespace CowColonySim.Sim.Grid;
 
 /// <summary>
-/// Immutable copy of a <see cref="TerrainChunk"/> plus the +X / +Z / +XZ seam
-/// corners borrowed from neighboring chunks. Enough data for a mesher to emit
-/// 16×16 tiles' worth of corner-height quads without touching live data, so
-/// meshing can run on a worker while the sim keeps mutating terrain.
+/// Immutable copy of a <see cref="TerrainChunk"/>'s per-tile corners + kinds,
+/// plus the corner rows from the +X / +Z neighbor tiles needed to resolve
+/// cliff walls at the chunk's east and north boundaries. A mesher worker can
+/// build the full 16×16 tile mesh (tops + walls) without touching live data.
+///
+/// Cliff walls are emergent: wherever the owning tile's facing corners differ
+/// from the neighbor tile's opposite corners, the mesher emits a vertical
+/// quad. Inside the chunk, each tile reads its east neighbor from its own
+/// <see cref="Corners"/> array. At the +X / +Z seams, it reads from the rim
+/// arrays below.
 /// </summary>
 public sealed class TerrainSnapshot
 {
     public const int Size = Chunk.Size;
     public readonly int ChunkX;
     public readonly int ChunkZ;
-    // 17×17 corner heights. Heights[lx, lz] where lx/lz ∈ [0, 16]. The chunk
-    // owns its 16×16 SW corners; the +X / +Z / +XZ corners are copied from
-    // whichever neighbor chunk owns them (falling back to the edge value if
-    // no neighbor exists).
-    public readonly short[,] Heights = new short[Size + 1, Size + 1];
-    // 16×16 tile surface kinds — Kinds[lx, lz] for tile (cx*Size+lx, cz*Size+lz).
+
+    // Own-tile corners. Corners[lx, lz, c] for c ∈ {SW, SE, NE, NW}.
+    public readonly short[,,] Corners = new short[Size, Size, 4];
+
+    // Surface kind per tile.
     public readonly byte[,] Kinds = new byte[Size, Size];
+
+    // East rim — for my tile at lx = Size-1, compare my SE/NE against the
+    // +X neighbor's tile at lx=0 SW/NW. EastRim[lz, 0] = neighbor SW,
+    // EastRim[lz, 1] = neighbor NW. When no +X neighbor exists (world edge),
+    // rim mirrors my own east-edge corners so the comparison produces no wall.
+    public readonly short[,] EastRim = new short[Size, 2];
+
+    // North rim — for my tile at lz = Size-1, compare my NW/NE against the
+    // +Z neighbor's tile at lz=0 SW/SE. NorthRim[lx, 0] = neighbor SW,
+    // NorthRim[lx, 1] = neighbor SE.
+    public readonly short[,] NorthRim = new short[Size, 2];
+
     public readonly int Revision;
 
     public TerrainSnapshot(int cx, int cz, int revision)

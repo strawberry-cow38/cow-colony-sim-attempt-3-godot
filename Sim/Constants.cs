@@ -18,6 +18,13 @@ public static class SimConstants
     public const int HeadroomTiles = 2;
     public const int ChunkSize = 16;
 
+    // Per-tile corner Y gap (in tile-height units) above which a cliff wall
+    // is emitted instead of a smooth slope. 3 tiles ≈ 2.25m. Below this the
+    // corner tracks the neighbor column (smooth). At or above, the corner is
+    // clamped to the tile's own column — producing a flat top and a vertical
+    // drop at the tile boundary.
+    public const int CliffDelta = 3;
+
     // Cells group chunks for streaming / tier gating. A cell is a square
     // (X/Z) slab of CellSizeChunks × CellSizeChunks chunks, spanning the
     // full vertical extent. 16 chunks = 256 tiles = 384m per side.

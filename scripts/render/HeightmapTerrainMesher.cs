@@ -6,20 +6,20 @@ using CowColonySim.Sim.Grid;
 namespace CowColonySim.Render;
 
 /// <summary>
-/// Emits a single <see cref="MeshBuildResult"/> from a <see cref="TerrainSnapshot"/> —
-/// two triangles per tile spanning the tile's four corner heights, producing
-/// smooth slopes wherever corners step (AoE2 / Sims-style). Cliff wall geometry
-/// is NOT emitted; a height-1 step renders as a steep slope. Buildings and
-/// rock stay on the voxel mesher.
+/// Emits a single <see cref="MeshBuildResult"/> from a <see cref="TerrainSnapshot"/>.
+/// One flat-shaded quad per tile uses the tile's own four render corners
+/// (SW/SE/NE/NW). Cliff walls are emergent: wherever an edge-shared corner
+/// pair disagrees with the adjacent tile's opposite corners, a vertical quad
+/// is emitted spanning the gap. Worldgen is responsible for clamping corners
+/// via the Cap rule so smooth terrain blends and cliffs produce walls.
 ///
 /// Kinds:
 ///  - <see cref="TileKind.Floor"/> → grass (cell 0..6, hashed by world XZ)
 ///  - <see cref="TileKind.Sand"/>  → sand (cell 15)
 ///  - <see cref="TileKind.Water"/> → white cell + water tint; top Y drops by
-///    <c>WaterTopDropMeters</c> so the shore reads as a step above the waterline.
-///    Matches the L0/L1 voxel mesher's shore treatment.
-/// Any other kind (Solid, Empty) is skipped — the voxel mesher still owns rock
-/// fills and buildings, and Empty shouldn't appear post-WorldGen.
+///    <c>WaterTopDropMeters</c> so the shore reads as a step above the
+///    waterline.
+/// Any other kind (Solid, Empty) is skipped.
 /// </summary>
 public sealed class HeightmapTerrainMesher
 {
@@ -46,16 +46,16 @@ public sealed class HeightmapTerrainMesher
             if (kind != TileKind.Floor && kind != TileKind.Sand && kind != TileKind.Water)
                 continue;
 
-            var h00 = snap.Heights[lx,     lz    ];
-            var h10 = snap.Heights[lx + 1, lz    ];
-            var h11 = snap.Heights[lx + 1, lz + 1];
-            var h01 = snap.Heights[lx,     lz + 1];
+            var hSW = snap.Corners[lx, lz, TerrainChunk.SW];
+            var hSE = snap.Corners[lx, lz, TerrainChunk.SE];
+            var hNE = snap.Corners[lx, lz, TerrainChunk.NE];
+            var hNW = snap.Corners[lx, lz, TerrainChunk.NW];
 
             var waterDrop = kind == TileKind.Water ? WaterTopDropMeters : 0f;
-            var y00 = h00 * th - waterDrop;
-            var y10 = h10 * th - waterDrop;
-            var y11 = h11 * th - waterDrop;
-            var y01 = h01 * th - waterDrop;
+            var ySW = hSW * th - waterDrop;
+            var ySE = hSE * th - waterDrop;
+            var yNE = hNE * th - waterDrop;
+            var yNW = hNW * th - waterDrop;
 
             var x0 = chunkBaseX + lx * tw;
             var z0 = chunkBaseZ + lz * tw;
@@ -69,18 +69,17 @@ public sealed class HeightmapTerrainMesher
             var tint = TileAtlas.TintFor(kind);
 
             var vi = verts.Count;
-            var p00 = new Vector3(x0, y00, z0);
-            var p10 = new Vector3(x1, y10, z0);
-            var p11 = new Vector3(x1, y11, z1);
-            var p01 = new Vector3(x0, y01, z1);
-            verts.Add(p00); verts.Add(p10); verts.Add(p11); verts.Add(p01);
+            var pSW = new Vector3(x0, ySW, z0);
+            var pSE = new Vector3(x1, ySE, z0);
+            var pNE = new Vector3(x1, yNE, z1);
+            var pNW = new Vector3(x0, yNW, z1);
+            verts.Add(pSW); verts.Add(pSE); verts.Add(pNE); verts.Add(pNW);
 
             // Flat normal per tile — right-handed cross of (SW→NW) × (SW→SE)
             // points +Y for a flat quad, tilting toward uphill corners for a
-            // ramp. Both triangles share this normal so adjacent tiles with
-            // matching corner heights visually blend (same Y derivatives)
-            // without needing vertex sharing across tile borders.
-            var nrm = (p01 - p00).Cross(p10 - p00).Normalized();
+            // ramp. Shared across both triangles so adjacent tiles with
+            // matching facing corners blend seamlessly.
+            var nrm = (pNW - pSW).Cross(pSE - pSW).Normalized();
             if (nrm.LengthSquared() < 1e-6f) nrm = Vector3.Up;
             normals.Add(nrm); normals.Add(nrm); normals.Add(nrm); normals.Add(nrm);
 
@@ -91,10 +90,57 @@ public sealed class HeightmapTerrainMesher
             uvs.Add(new Vector2(u1, v1));
             uvs.Add(new Vector2(u0, v1));
 
-            // Two tris: SW→SE→NE, SW→NE→NW. Matches NaiveChunkMesher's top-
-            // face winding so back-face cull shows the upward surface.
             indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
             indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
+
+            // Cliff walls. Each tile handles its east (+X) and north (+Z)
+            // edge. The shared corner pair across the edge is compared to
+            // the neighbor tile's opposite corners; any disagreement yields
+            // a vertical quad. West / south walls are emitted by the
+            // respective western / southern neighbor tile, so no double-up.
+            short eSW, eNW;
+            if (lx + 1 < s)
+            {
+                eSW = snap.Corners[lx + 1, lz, TerrainChunk.SW];
+                eNW = snap.Corners[lx + 1, lz, TerrainChunk.NW];
+            }
+            else
+            {
+                eSW = snap.EastRim[lz, 0];
+                eNW = snap.EastRim[lz, 1];
+            }
+            // Water tiles drop their top by WaterTopDropMeters; walls need
+            // to match that drop for water-vs-water seams or match the
+            // neighbor's (undropped) Y for water-vs-land seams. Simplest:
+            // apply my own waterDrop to my top edge and none to the rim.
+            EmitWallIfGap(
+                verts, normals, colors, uvs, indices,
+                topA: new Vector3(x1, hSE * th - waterDrop, z0),
+                topB: new Vector3(x1, hNE * th - waterDrop, z1),
+                botA: new Vector3(x1, eSW * th, z0),
+                botB: new Vector3(x1, eNW * th, z1),
+                faceDirPlus: new Vector3(1f, 0f, 0f),
+                kind);
+
+            short nSW, nSE;
+            if (lz + 1 < s)
+            {
+                nSW = snap.Corners[lx, lz + 1, TerrainChunk.SW];
+                nSE = snap.Corners[lx, lz + 1, TerrainChunk.SE];
+            }
+            else
+            {
+                nSW = snap.NorthRim[lx, 0];
+                nSE = snap.NorthRim[lx, 1];
+            }
+            EmitWallIfGap(
+                verts, normals, colors, uvs, indices,
+                topA: new Vector3(x1, hNE * th - waterDrop, z1),
+                topB: new Vector3(x0, hNW * th - waterDrop, z1),
+                botA: new Vector3(x1, nSE * th, z1),
+                botB: new Vector3(x0, nSW * th, z1),
+                faceDirPlus: new Vector3(0f, 0f, 1f),
+                kind);
         }
 
         if (indices.Count == 0) return null;
@@ -109,5 +155,67 @@ public sealed class HeightmapTerrainMesher
             Revision = snap.Revision,
             LodLevel = 0,
         };
+    }
+
+    // Emits a vertical cliff quad between two (top, bot) corner pairs if the
+    // top is strictly higher than the bottom on at least one side. Winds CCW
+    // as seen from the +face direction (the outward-facing side). When the
+    // "top" is actually lower than "bot" (neighbor higher than self), swaps
+    // roles and flips the face normal so the outward side still points away
+    // from the taller tile.
+    private static void EmitWallIfGap(
+        List<Vector3> verts, List<Vector3> normals, List<Color> colors,
+        List<Vector2> uvs, List<int> indices,
+        Vector3 topA, Vector3 topB, Vector3 botA, Vector3 botB,
+        Vector3 faceDirPlus, TileKind kind)
+    {
+        var selfUpperA = topA.Y > botA.Y;
+        var selfUpperB = topB.Y > botB.Y;
+        var selfLowerA = topA.Y < botA.Y;
+        var selfLowerB = topB.Y < botB.Y;
+
+        if ((selfUpperA || selfUpperB) && !(selfLowerA || selfLowerB))
+        {
+            // Self is the upper tile → wall faces +faceDirPlus (outward from self).
+            // Winding: bot → top on each side, outer face faces +faceDirPlus.
+            EmitCliffQuad(verts, normals, colors, uvs, indices,
+                bl: botA, tl: topA, tr: topB, br: botB,
+                normal: faceDirPlus, kind);
+        }
+        else if ((selfLowerA || selfLowerB) && !(selfUpperA || selfUpperB))
+        {
+            // Neighbor is the upper tile → wall faces -faceDirPlus.
+            // The top of the wall is the neighbor's corners (our "bot" param
+            // which is actually higher here); bottom is our own edge (our
+            // "top" param). Swap and flip normal.
+            EmitCliffQuad(verts, normals, colors, uvs, indices,
+                bl: topA, tl: botA, tr: botB, br: topB,
+                normal: -faceDirPlus, kind);
+        }
+        // else: either flat (no gap) or a twisted corner (one side self-upper,
+        // other side self-lower). Skip twisted corners — pathological edge
+        // case not produced by the Cap rule on well-formed worldgen.
+    }
+
+    private static void EmitCliffQuad(
+        List<Vector3> verts, List<Vector3> normals, List<Color> colors,
+        List<Vector2> uvs, List<int> indices,
+        Vector3 bl, Vector3 tl, Vector3 tr, Vector3 br,
+        Vector3 normal, TileKind kind)
+    {
+        var cell = TileAtlas.CellForSide(kind);
+        var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
+        var tint = TileAtlas.TintFor(kind);
+
+        var vi = verts.Count;
+        verts.Add(bl); verts.Add(tl); verts.Add(tr); verts.Add(br);
+        normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
+        colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
+        uvs.Add(new Vector2(u0, v1));
+        uvs.Add(new Vector2(u0, v0));
+        uvs.Add(new Vector2(u1, v0));
+        uvs.Add(new Vector2(u1, v1));
+        indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
+        indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
     }
 }

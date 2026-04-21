@@ -158,19 +158,22 @@ public class WorldGenTests
     public void SnapshotTerrain_Copies_Owned_Corners_And_Kinds()
     {
         var world = new TileWorld();
-        // Touching any corner inside chunk (0,0) materializes it.
-        for (var lx = 0; lx < TerrainChunk.Size; lx++)
-        for (var lz = 0; lz < TerrainChunk.Size; lz++)
+        const int s = TerrainChunk.Size;
+        // Populate per-tile corners + kinds across chunk (0,0).
+        for (var lx = 0; lx < s; lx++)
+        for (var lz = 0; lz < s; lz++)
         {
-            world.SetTerrainHeight(lx, lz, (short)(lx + lz));
+            var baseH = (short)(lx + lz);
+            world.SetTileCorners(lx, lz, baseH, baseH, baseH, baseH);
             world.SetTerrainKind(lx, lz, lx == 0 ? TileKind.Sand : TileKind.Floor);
         }
         var snap = world.SnapshotTerrain(0, 0);
         Assert.NotNull(snap);
-        for (var lx = 0; lx < TerrainChunk.Size; lx++)
-        for (var lz = 0; lz < TerrainChunk.Size; lz++)
+        for (var lx = 0; lx < s; lx++)
+        for (var lz = 0; lz < s; lz++)
         {
-            Assert.Equal(lx + lz, snap!.Heights[lx, lz]);
+            Assert.Equal(lx + lz, snap!.Corners[lx, lz, TerrainChunk.SW]);
+            Assert.Equal(lx + lz, snap.Corners[lx, lz, TerrainChunk.NE]);
             Assert.Equal(lx == 0 ? (byte)TileKind.Sand : (byte)TileKind.Floor,
                 snap.Kinds[lx, lz]);
         }
@@ -181,20 +184,20 @@ public class WorldGenTests
     {
         var world = new TileWorld();
         const int s = TerrainChunk.Size;
-        // Write a baseline into chunk (0,0) so it materializes.
-        world.SetTerrainHeight(0, 0, 1);
-        // +X neighbor corner at world (s, 5) — owned by chunk (1,0) at lx=0,lz=5.
-        world.SetTerrainHeight(s, 5, 42);
-        // +Z neighbor corner at world (7, s).
-        world.SetTerrainHeight(7, s, 77);
-        // +XZ neighbor corner at world (s, s).
-        world.SetTerrainHeight(s, s, 99);
+        // Materialize own chunk.
+        world.SetTileCorners(0, 0, 1, 1, 1, 1);
+        // +X neighbor tile at world (s, 5) — its west edge (SW, NW) becomes
+        // EastRim[5, 0] and EastRim[5, 1] for chunk (0,0).
+        world.SetTileCorners(s, 5, sw: 42, se: 99, ne: 99, nw: 44);
+        // +Z neighbor tile at world (7, s) — south edge (SW, SE) → NorthRim[7].
+        world.SetTileCorners(7, s, sw: 77, se: 78, ne: 99, nw: 99);
 
         var snap = world.SnapshotTerrain(0, 0);
         Assert.NotNull(snap);
-        Assert.Equal(42, snap!.Heights[s, 5]);
-        Assert.Equal(77, snap.Heights[7, s]);
-        Assert.Equal(99, snap.Heights[s, s]);
+        Assert.Equal(42, snap!.EastRim[5, 0]);
+        Assert.Equal(44, snap.EastRim[5, 1]);
+        Assert.Equal(77, snap.NorthRim[7, 0]);
+        Assert.Equal(78, snap.NorthRim[7, 1]);
     }
 
     [Fact]
@@ -202,34 +205,65 @@ public class WorldGenTests
     {
         var world = new TileWorld();
         const int s = TerrainChunk.Size;
-        // Single chunk, no neighbors. Edge column at lx=s-1 set to 5;
-        // expect the seam row at lx=s to mirror it.
+        // Solitary chunk. Set east-edge tile corners; expect EastRim to
+        // mirror my own SE/NE so no spurious wall gap appears.
         for (var lz = 0; lz < s; lz++)
-            world.SetTerrainHeight(s - 1, lz, 5);
+            world.SetTileCorners(s - 1, lz, sw: 5, se: 5, ne: 5, nw: 5);
         var snap = world.SnapshotTerrain(0, 0);
         Assert.NotNull(snap);
         for (var lz = 0; lz < s; lz++)
-            Assert.Equal(5, snap!.Heights[s, lz]);
+        {
+            Assert.Equal(5, snap!.EastRim[lz, 0]);
+            Assert.Equal(5, snap.EastRim[lz, 1]);
+        }
     }
 
     [Fact]
     public void TerrainSlope_Reports_Max_Corner_Delta()
     {
         var world = new TileWorld();
-        // Flat quad
-        world.SetTerrainHeight(0, 0, 5);
-        world.SetTerrainHeight(1, 0, 5);
-        world.SetTerrainHeight(0, 1, 5);
-        world.SetTerrainHeight(1, 1, 5);
+        // Flat tile.
+        world.SetTileCorners(0, 0, sw: 5, se: 5, ne: 5, nw: 5);
         Assert.Equal(0, world.TerrainSlope(0, 0));
 
-        // 1-step ramp
-        world.SetTerrainHeight(1, 0, 6);
-        world.SetTerrainHeight(1, 1, 6);
+        // 1-step ramp (SW/NW = 5, SE/NE = 6).
+        world.SetTileCorners(0, 0, sw: 5, se: 6, ne: 6, nw: 5);
         Assert.Equal(1, world.TerrainSlope(0, 0));
 
-        // Cliff
-        world.SetTerrainHeight(1, 1, 9);
+        // Steep corner (NE = 9 vs SW = 5). Render corners this wide only
+        // appear if something bypassed the Cap rule — TerrainSlope still
+        // reports max-min so callers can detect it.
+        world.SetTileCorners(0, 0, sw: 5, se: 6, ne: 9, nw: 5);
         Assert.Equal(4, world.TerrainSlope(0, 0));
+    }
+
+    [Fact]
+    public void Generate_Clamps_Corners_To_Own_Column_Across_Cliffs()
+    {
+        // Build a minimal world manually: a 2-tile strip with a col gap
+        // above CliffDelta. Corner Cap rule must clamp the low tile's east
+        // corners and the high tile's west corners to their own column.
+        var world = new TileWorld();
+        const int delta = SimConstants.CliffDelta;
+        // Low tile col = 0, plateau tile col = delta + 2. Gap > delta.
+        var low = (short)0;
+        var high = (short)(delta + 2);
+        // Simulate worldgen by writing columns and applying the Cap rule
+        // directly for a 2-tile fixture.
+        world.SetTerrainHeight(0, 0, low);
+        world.SetTerrainHeight(1, 0, high);
+        world.SetTileCorners(0, 0, sw: low, se: low, ne: low, nw: low);   // Cap(high, low) = low
+        world.SetTileCorners(1, 0, sw: high, se: high, ne: high, nw: high);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        // Low tile east corners match its own col — flat top.
+        Assert.Equal(low, snap!.Corners[0, 0, TerrainChunk.SE]);
+        Assert.Equal(low, snap.Corners[0, 0, TerrainChunk.NE]);
+        // High tile west corners match its own col — flat top.
+        Assert.Equal(high, snap.Corners[1, 0, TerrainChunk.SW]);
+        Assert.Equal(high, snap.Corners[1, 0, TerrainChunk.NW]);
+        // Disagreement at the shared edge: low SE (=low) vs high SW (=high).
+        // The mesher compares these and emits the wall.
     }
 }

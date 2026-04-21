@@ -152,11 +152,8 @@ public static class WorldGen
                 tiles.Set(new TilePos(x, y, z), water);
             }
 
-            // Heightmap: store the TOP corner of the column — the walkable
-            // surface — so corner (x, z) lands at the SW corner of tile
-            // (x, z). Lake columns store the raw land height (floor of the
-            // basin); water surface is implied by WaterLevelY. Kind per tile
-            // distinguishes grass/sand/water at the surface.
+            // Column height (walkable floor Y) + surface kind. Pathfinding
+            // reads column height; render corners are derived below.
             tiles.SetTerrainHeight(x, z, (short)height);
             var surfaceKind = height < WaterLevelY
                 ? TileKind.Water
@@ -165,8 +162,33 @@ public static class WorldGen
 
             surfaceTiles++;
         }
+
+        // Per-tile corner derivation. SW corner is always the tile's own
+        // column. SE/NE/NW sample the east / NE-diagonal / north neighbor
+        // columns, but clamp to own if the gap exceeds CliffDelta. Neighbor-
+        // matching corners blend smoothly wherever terrain is gradual; big
+        // gaps force the corner flat at own Y, creating a discontinuity the
+        // mesher auto-walls.
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+        {
+            var x = xi - halfX;
+            var z = zi - halfZ;
+            var own = heights[xi, zi];
+            var east  = (xi + 1 < sizeX) ? heights[xi + 1, zi]     : own;
+            var ne    = (xi + 1 < sizeX && zi + 1 < sizeZ) ? heights[xi + 1, zi + 1] : own;
+            var north = (zi + 1 < sizeZ) ? heights[xi,     zi + 1] : own;
+            tiles.SetTileCorners(x, z,
+                sw: (short)own,
+                se: (short)Cap(east,  own),
+                ne: (short)Cap(ne,    own),
+                nw: (short)Cap(north, own));
+        }
         return surfaceTiles;
     }
+
+    private static int Cap(int candidate, int own)
+        => Math.Abs(candidate - own) > SimConstants.CliffDelta ? own : candidate;
 
     public static int SurfaceY(TileWorld tiles, int x, int z, int maxProbe = 128, int minProbe = -16)
     {

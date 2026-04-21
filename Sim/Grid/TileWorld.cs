@@ -121,7 +121,7 @@ public sealed class TileWorld
     public short TerrainHeightAt(int x, int z)
     {
         var (cx, cz, lx, lz) = SplitXZ(x, z);
-        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.Heights[lx, lz] : (short)0;
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.ColumnHeights[lx, lz] : (short)0;
     }
 
     /// <summary>
@@ -136,24 +136,36 @@ public sealed class TileWorld
     }
 
     /// <summary>
-    /// Max absolute Δh (in tile units) between any two of tile (x, z)'s four
-    /// corner heights. 0 = flat, 1 = gentle ramp, ≥2 = cliff or wall.
+    /// Max absolute Δh (in tile units) across tile (x, z)'s four render
+    /// corners. 0 = flat (includes plateau tiles whose corners are clamped
+    /// to own column), 1 = gentle ramp. A cliff TOP reports 0 because its
+    /// corners sit flat at plateau Y — the drop lives on the wall, not in
+    /// the top quad.
     /// </summary>
     public int TerrainSlope(int x, int z)
     {
-        var h00 = TerrainHeightAt(x, z);
-        var h10 = TerrainHeightAt(x + 1, z);
-        var h01 = TerrainHeightAt(x, z + 1);
-        var h11 = TerrainHeightAt(x + 1, z + 1);
-        var lo = System.Math.Min(System.Math.Min(h00, h10), System.Math.Min(h01, h11));
-        var hi = System.Math.Max(System.Math.Max(h00, h10), System.Math.Max(h01, h11));
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        if (!_terrainChunks.TryGetValue((cx, cz), out var tc)) return 0;
+        var sw = tc.Corners[lx, lz, TerrainChunk.SW];
+        var se = tc.Corners[lx, lz, TerrainChunk.SE];
+        var ne = tc.Corners[lx, lz, TerrainChunk.NE];
+        var nw = tc.Corners[lx, lz, TerrainChunk.NW];
+        var lo = System.Math.Min(System.Math.Min(sw, se), System.Math.Min(ne, nw));
+        var hi = System.Math.Max(System.Math.Max(sw, se), System.Math.Max(ne, nw));
         return hi - lo;
     }
 
     public void SetTerrainHeight(int x, int z, short h)
     {
         var (cx, cz, lx, lz) = SplitXZ(x, z);
-        GetOrCreateTerrainChunk(cx, cz).SetHeight(lx, lz, h);
+        GetOrCreateTerrainChunk(cx, cz).SetColumnHeight(lx, lz, h);
+        MutationTick++;
+    }
+
+    public void SetTileCorners(int x, int z, short sw, short se, short ne, short nw)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetCorners(lx, lz, sw, se, ne, nw);
         MutationTick++;
     }
 
@@ -168,10 +180,11 @@ public sealed class TileWorld
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 
     /// <summary>
-    /// Copy of a terrain chunk plus its +X / +Z / +XZ seam corners, for
-    /// worker-thread meshing. Returns null if the chunk isn't resident; the
-    /// seam falls back to the chunk's own edge corners if a neighbor is
-    /// missing (world border) so a solitary chunk meshes cleanly.
+    /// Copy of a terrain chunk's per-tile corners + kinds, plus the east and
+    /// north rim corners from the +X / +Z neighbor tiles (for resolving cliff
+    /// walls at the chunk boundary). Returns null if the chunk isn't resident.
+    /// When a neighbor chunk is absent (world edge), the rim mirrors this
+    /// chunk's own edge-tile corners so boundary comparisons produce no wall.
     /// </summary>
     public TerrainSnapshot? SnapshotTerrain(int cx, int cz)
     {
@@ -181,21 +194,41 @@ public sealed class TileWorld
         for (var lx = 0; lx < s; lx++)
         for (var lz = 0; lz < s; lz++)
         {
-            snap.Heights[lx, lz] = tc.Heights[lx, lz];
-            snap.Kinds[lx, lz]   = tc.Kinds[lx, lz];
+            snap.Corners[lx, lz, TerrainChunk.SW] = tc.Corners[lx, lz, TerrainChunk.SW];
+            snap.Corners[lx, lz, TerrainChunk.SE] = tc.Corners[lx, lz, TerrainChunk.SE];
+            snap.Corners[lx, lz, TerrainChunk.NE] = tc.Corners[lx, lz, TerrainChunk.NE];
+            snap.Corners[lx, lz, TerrainChunk.NW] = tc.Corners[lx, lz, TerrainChunk.NW];
+            snap.Kinds[lx, lz] = tc.Kinds[lx, lz];
         }
         _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
         _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);
-        _terrainChunks.TryGetValue((cx + 1, cz + 1), out var pxz);
         for (var lz = 0; lz < s; lz++)
-            snap.Heights[s, lz] = px?.Heights[0, lz] ?? tc.Heights[s - 1, lz];
+        {
+            if (px != null)
+            {
+                snap.EastRim[lz, 0] = px.Corners[0, lz, TerrainChunk.SW];
+                snap.EastRim[lz, 1] = px.Corners[0, lz, TerrainChunk.NW];
+            }
+            else
+            {
+                // No neighbor: mirror own east-edge corners so no wall emits.
+                snap.EastRim[lz, 0] = tc.Corners[s - 1, lz, TerrainChunk.SE];
+                snap.EastRim[lz, 1] = tc.Corners[s - 1, lz, TerrainChunk.NE];
+            }
+        }
         for (var lx = 0; lx < s; lx++)
-            snap.Heights[lx, s] = pz?.Heights[lx, 0] ?? tc.Heights[lx, s - 1];
-        snap.Heights[s, s] =
-            pxz?.Heights[0, 0] ??
-            px?.Heights[0, s - 1] ??
-            pz?.Heights[s - 1, 0] ??
-            tc.Heights[s - 1, s - 1];
+        {
+            if (pz != null)
+            {
+                snap.NorthRim[lx, 0] = pz.Corners[lx, 0, TerrainChunk.SW];
+                snap.NorthRim[lx, 1] = pz.Corners[lx, 0, TerrainChunk.SE];
+            }
+            else
+            {
+                snap.NorthRim[lx, 0] = tc.Corners[lx, s - 1, TerrainChunk.NW];
+                snap.NorthRim[lx, 1] = tc.Corners[lx, s - 1, TerrainChunk.NE];
+            }
+        }
         return snap;
     }
 
