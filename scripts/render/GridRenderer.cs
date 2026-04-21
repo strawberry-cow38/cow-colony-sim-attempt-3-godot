@@ -41,6 +41,8 @@ public sealed partial class GridRenderer : Node3D
     private SimHost? _simHost;
     private StandardMaterial3D? _material;
     private Shader? _terrainShader;
+    private Shader? _lodShader;
+    private ShaderMaterial? _lodMaterial;
     private Texture2D? _grassTex;
     private ArrayMesh? _g4PatchMesh;
     private ArrayMesh? _g8PatchMesh;
@@ -86,6 +88,22 @@ public sealed partial class GridRenderer : Node3D
                     RenderingServer.GlobalShaderParameterType.Vec3,
                     Vector3.Zero);
             }
+
+            // Custom L0/L1 material — same vertex-color-modulated grass as
+            // StandardMaterial3D, plus a cylindrical IGN dither fade-out in
+            // [tier1-chunk, tier1] that complements G4's fade-in. Without
+            // the per-fragment fade the L1/G4 seam was only hidden by a
+            // +2-chunk over-extension on L1; the fade lets L1 end at its
+            // true classifier boundary with every pixel drawn exactly once.
+            _lodShader = GD.Load<Shader>("res://scripts/render/shaders/terrain_lod.gdshader");
+            _lodMaterial = new ShaderMaterial { Shader = _lodShader };
+            _lodMaterial.SetShaderParameter("albedo_tex", _grassTex);
+            const float lodChunkM = Chunk.Size * TileCoord.TileW;
+            const float lodTier1m = Tier1Range * lodChunkM;
+            const float lodFadeMargin = lodChunkM;
+            _lodMaterial.SetShaderParameter("fade_out_start_m", lodTier1m - lodFadeMargin);
+            _lodMaterial.SetShaderParameter("fade_out_end_m", lodTier1m);
+            _lodMaterial.SetShaderParameter("fog_end_m", MaxChunkDistance * lodChunkM);
         }
     }
 
@@ -150,16 +168,12 @@ public sealed partial class GridRenderer : Node3D
             long maxDistSq = (long)MaxChunkDistance * MaxChunkDistance;
             long tier0Sq = (long)Tier0Range * Tier0Range;
             long tier1Sq = (long)Tier1Range * Tier1Range;
-            // Extend LIVE two chunks past tier1 so L1 meshes overlap the band
-            // where G4's fade-in has already reached full opacity. Without the
-            // overlap, L1 ends sharply at tier1m and any height disagreement
-            // between L1's per-tile voxel cliffs and G4's per-cell (4×4 tile
-            // avg) cliffs punches a visible crack. A 2-chunk overlap also
-            // masks the camera-pan pop when a freshly classified L1 chunk
-            // replaces the G4 surface — the swap happens inside the overlap
-            // band where the eye is already reading fog, so it reads as a
-            // soft detail-add instead of a sharp geometry flip.
-            long tier1OuterSq = (long)(Tier1Range + 2) * (Tier1Range + 2);
+            // L1 ends at its classifier boundary (tier1Sq). The per-fragment
+            // IGN dither fade-out on terrain_lod.gdshader, band-matched to
+            // G4's fade-in on terrain_heightmap.gdshader, handles the
+            // crossover — every pixel is drawn by exactly one tier, so the
+            // earlier +2 chunk over-extension (which bought seam coverage
+            // at ~60% extra L1 draws) is no longer needed.
             // Overlap bands. L1/G4 boundary: G4 extends 1 chunk INTO L1
             // territory so it can fade in where L1 covers it (tier1InnerSq).
             // G4/G8 boundary: G4's fade_out covers [tier3, tier3+1 chunk], so
@@ -193,7 +207,7 @@ public sealed partial class GridRenderer : Node3D
                     long g8MinSq  = GroupMinDistSq(g8Key, Group8, camChunkX, camChunkZ);
                     long g8MaxSq  = GroupMaxDistSq(g8Key, Group8, camChunkX, camChunkZ);
 
-                    if (dSq <= tier1OuterSq)
+                    if (dSq <= tier1Sq)
                         perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
                     // Group needed if ANY chunk in it falls past the tier's fade-in
                     // edge (use MAX dist); cull if WHOLLY past the coarse tier's end
@@ -766,7 +780,10 @@ public sealed partial class GridRenderer : Node3D
         return new MeshInstance3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey),
-            MaterialOverride = _material,
+            // Prefer the shader material when GPU terrain is on so L1 gets
+            // its cylindrical dither fade-out; fall back to the standard
+            // material when the GPU path is disabled (no fade path wired).
+            MaterialOverride = _lodMaterial ?? (Material?)_material,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
     }
