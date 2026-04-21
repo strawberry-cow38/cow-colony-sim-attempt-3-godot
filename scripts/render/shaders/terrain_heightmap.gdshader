@@ -56,8 +56,13 @@ float sample_height(vec2 uv_local) {
 	return texture(heightmap, uv_local).r * height_scale_m;
 }
 
-float hash12(vec2 p) {
-	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+// Interleaved Gradient Noise (Jimenez). Approximates blue-noise spectrum from
+// just three float ops — no texture fetch — so neighboring pixels get values
+// that are decorrelated rather than forming the bright grid patterns white-
+// noise hashes produce. Good enough that it's what COD/UE ship for their
+// screen-space dithers.
+float ign(vec2 p) {
+	return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
 }
 
 void vertex() {
@@ -80,7 +85,12 @@ void fragment() {
 		vec2(v_world_pos.x, v_world_pos.z),
 		vec2(gimbal_pos.x, gimbal_pos.z));
 	if (d > fog_end_m) discard;
-	float h = hash12(FRAGCOORD.xy);
+	// Per-frame TIME offset so the dither pattern walks each frame. Between
+	// flicker-fusion and the eye's temporal integration the noise reads as
+	// soft grain instead of a static pixel sieve. Golden-ratio multipliers on
+	// TIME keep the offset from ever repeating within a sane session length.
+	vec2 dither_off = vec2(fract(TIME * 1.6180339887), fract(TIME * 2.7182818285)) * 64.0;
+	float h = ign(FRAGCOORD.xy + dither_off);
 	if (fade_in_end_m > fade_in_start_m) {
 		float t = clamp((d - fade_in_start_m) / (fade_in_end_m - fade_in_start_m), 0.0, 1.0);
 		if (t < h) discard;
