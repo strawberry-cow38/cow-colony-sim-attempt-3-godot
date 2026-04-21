@@ -203,4 +203,19 @@ public static class GpuTerrain
         var img = Image.CreateFromData(sizeX, sizeZ, false, Image.Format.R8, buf);
         return ImageTexture.CreateFromImage(img);
     }
+
+    /// <summary>
+    /// Upload a per-cell TileKind byte map alongside the heightmap so the
+    /// terrain shader can branch on water / sand without another sampling
+    /// scheme. Raw byte copy — no scaling.
+    /// </summary>
+    public static ImageTexture BuildKindmapTexture(byte[,] kinds, int sizeX, int sizeZ)
+    {
+        var buf = new byte[sizeX * sizeZ];
+        for (var z = 0; z < sizeZ; z++)
+        for (var x = 0; x < sizeX; x++)
+            buf[z * sizeX + x] = kinds[x, z];
+        var img = Image.CreateFromData(sizeX, sizeZ, false, Image.Format.R8, buf);
+        return ImageTexture.CreateFromImage(img);
+    }
 }

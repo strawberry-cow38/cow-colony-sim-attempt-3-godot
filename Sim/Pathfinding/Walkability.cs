@@ -4,7 +4,8 @@ namespace CowColonySim.Sim.Pathfinding;
 
 public static class Walkability
 {
-    public static bool IsSupport(Tile t) => t.Kind == TileKind.Solid || t.Kind == TileKind.Floor;
+    public static bool IsSupport(Tile t) =>
+        t.Kind == TileKind.Solid || t.Kind == TileKind.Floor || t.Kind == TileKind.Sand;
 
     public static bool IsStandable(TileWorld world, TilePos pos)
     {

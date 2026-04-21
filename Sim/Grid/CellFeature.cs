@@ -16,9 +16,9 @@ public static class FeatureResolver
     {
         uint h = Hash((uint)seed, key.X, key.Z);
         int roll = (int)(h % 100u);
-        if (roll < 35) return CellFeature.Plains;
-        if (roll < 65) return CellFeature.Hills;
-        if (roll < 85) return CellFeature.Mountains;
+        if (roll < 40) return CellFeature.Plains;
+        if (roll < 70) return CellFeature.Hills;
+        if (roll < 92) return CellFeature.Mountains;
         return CellFeature.Lake;
     }
 
@@ -48,9 +48,11 @@ public sealed class FeatureNoises
 
     public FeatureNoises(int seed)
     {
-        // Low freq + low amp = broad, slow rollers; reads as "open pasture".
-        // High-freq plains read as bumpy chop — bad for building / traversal.
-        Plains    = Make(seed + 1, 0.006f, 2);
+        // Very low freq + low amp = gently rolling pasture. The old 0.006f/oct2
+        // still felt noisy because even slow rollers at amplitude 5 kept dipping
+        // across 0 at plains/lake borders, leaving swiss-cheese ponds. 0.004f +
+        // oct1 flattens that out so plains read as one smooth sheet.
+        Plains    = Make(seed + 1, 0.004f, 1);
         Hills     = Make(seed + 2, 0.010f, 4);
         Mountains = Make(seed + 3, 0.003f, 5);
         Lake      = Make(seed + 4, 0.030f, 2);
@@ -77,7 +79,11 @@ public sealed class FeatureNoises
         switch (f)
         {
             case CellFeature.Plains:
-                return 3f + (Plains.GetNoise(x, z) + 1f) * 0.5f * 5f;
+                // Base 6, amp 3 (range 6..9). Higher floor + smaller amplitude
+                // means bilerp with adjacent Lake cells (which sample h<0)
+                // crosses zero only in a narrow shore band instead of
+                // dimpling the plains interior with pond-sized dips.
+                return 6f + (Plains.GetNoise(x, z) + 1f) * 0.5f * 3f;
             case CellFeature.Hills:
                 return 4f + (Hills.GetNoise(x, z) + 1f) * 0.5f * 36f;
             case CellFeature.Mountains:

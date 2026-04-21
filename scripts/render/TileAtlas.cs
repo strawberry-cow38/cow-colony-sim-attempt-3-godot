@@ -26,6 +26,7 @@ public static class TileAtlas
     private static readonly int[] GrassCells = { 0, 1, 2, 3, 4, 5, 6 };
     private const int DirtCell = 10;
     private const int RockCell = 13;
+    private const int SandCell = 15;
     // Cell 9 in the atlas is a near-white fallback. Pairing it with a tint
     // gives a clean colored surface — sand or dirt cells would muddy the
     // multiplied result.
@@ -38,6 +39,7 @@ public static class TileAtlas
             TileKind.Floor => GrassCells[Hash(wx, wz) % GrassCells.Length],
             TileKind.Solid => DirtCell,
             TileKind.Water => WhiteCell,
+            TileKind.Sand  => SandCell,
             _ => DirtCell,
         };
     }
@@ -49,6 +51,7 @@ public static class TileAtlas
             TileKind.Floor => DirtCell,
             TileKind.Solid => RockCell,
             TileKind.Water => WhiteCell,
+            TileKind.Sand  => SandCell,
             _ => DirtCell,
         };
     }

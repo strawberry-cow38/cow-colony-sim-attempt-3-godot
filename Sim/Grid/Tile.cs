@@ -6,6 +6,7 @@ public enum TileKind : byte
     Solid = 1,
     Floor = 2,
     Water = 3,
+    Sand = 4,
 }
 
 public readonly record struct Tile(TileKind Kind)

@@ -110,6 +110,7 @@ public static class WorldGen
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
         var water = new Tile(TileKind.Water);
+        var sand  = new Tile(TileKind.Sand);
         var surfaceTiles = 0;
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
@@ -117,19 +118,31 @@ public static class WorldGen
             var height = heights[xi, zi];
             var x = xi - halfX;
             var z = zi - halfZ;
-            // For columns with positive surface y, fill solid from y=0 to top
-            // so cliff faces show rock down to sea level. For lake columns
-            // (negative top y), only fill 2 tiles of bedrock under the grass —
-            // anything deeper would be invisible underwater anyway.
+
+            // Shore detection: a land column is "shore" if its surface is
+            // within 2 tiles of sea level AND any 8-neighbor column is a
+            // submerged lake column. Paints a sandy band around every lake
+            // instead of grass running right to the waterline.
+            var isShore = false;
+            if (height >= WaterLevelY && height <= WaterLevelY + 2)
+            {
+                for (var dz = -1; dz <= 1 && !isShore; dz++)
+                for (var dx = -1; dx <= 1 && !isShore; dx++)
+                {
+                    if (dx == 0 && dz == 0) continue;
+                    var nxi = xi + dx;
+                    var nzi = zi + dz;
+                    if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                    if (heights[nxi, nzi] < WaterLevelY) isShore = true;
+                }
+            }
+
             var rockBase = Math.Min(0, height - 3);
             for (var y = rockBase; y < height - 1; y++)
             {
                 tiles.Set(new TilePos(x, y, z), solid);
             }
-            tiles.Set(new TilePos(x, height - 1, z), grass);
-            // Flood-fill water column for any ground-top below sea level.
-            // Lake cells (heights -8..-2) submerge fully; plains/hills/mts
-            // (all positive heights) never trigger water-fill.
+            tiles.Set(new TilePos(x, height - 1, z), isShore ? sand : grass);
             for (var y = height; y < WaterLevelY; y++)
             {
                 tiles.Set(new TilePos(x, y, z), water);

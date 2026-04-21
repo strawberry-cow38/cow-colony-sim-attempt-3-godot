@@ -28,6 +28,13 @@ public sealed partial class GridRenderer : Node3D
 
     public static bool GpuTerrainEnabled = true;
 
+    // Every non-LIVE tier renders this far below its true Y. Keeps coarse
+    // tiers from Z-fighting with the L0 voxel mesh across the fade band
+    // where both are drawn — LIVE always wins the depth test. 1m is enough
+    // to kill fighting on near-field flat plains without being visible
+    // through the dither-fade boundary at the far edge.
+    private const float LodYSink = 1.0f;
+
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g4Slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g8Slots = new();
@@ -294,8 +301,15 @@ public sealed partial class GridRenderer : Node3D
             if (!_slots.TryGetValue(key, out var slot)) continue;
             slot.InFlight = false;
             slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
+            var effectiveLod = result?.LodLevel ?? lod;
+            // L0 renders at true Y; L1 sinks under LIVE to kill Z-fighting in
+            // the overlap band. Update Position here because a single slot
+            // flips tier as the camera moves.
+            var origin = TileCoord.ChunkOrigin(key);
+            var sinkY = effectiveLod >= 1 ? LodYSink : 0f;
+            slot.MeshInstance.Position = new Vector3(origin.X, origin.Y - sinkY, origin.Z);
             slot.UploadedRevision = slot.RequestedRevision;
-            slot.CurrentLod = result?.LodLevel ?? lod;
+            slot.CurrentLod = effectiveLod;
             Profiler.IncRate(lod == 0 ? "L0 up/s" : "L1 up/s");
             drained++;
         }
@@ -328,8 +342,10 @@ public sealed partial class GridRenderer : Node3D
             {
                 var tex = GpuTerrain.BuildHeightmapTexture(
                     patch.Heights, patch.SizeX, patch.SizeZ, patch.MaxHeightMeters);
+                var kindTex = GpuTerrain.BuildKindmapTexture(
+                    patch.Kinds, patch.SizeX, patch.SizeZ);
                 slot.MeshInstance.Mesh = groupSize == Group4 ? _g4PatchMesh : _g8PatchMesh;
-                slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex);
+                slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex, kindTex);
             }
             slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
@@ -665,17 +681,18 @@ public sealed partial class GridRenderer : Node3D
         var half = groupSize * Chunk.Size * TileCoord.TileW * 0.5f;
         return new MeshInstance3D
         {
-            Position = TileCoord.ChunkOrigin(originChunkKey) + new Vector3(half, 0f, half),
+            Position = TileCoord.ChunkOrigin(originChunkKey) + new Vector3(half, -LodYSink, half),
             Mesh = patchMesh,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
     }
 
-    private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap)
+    private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap, ImageTexture kindmap)
     {
         var patchWidth = groupSize * Chunk.Size * TileCoord.TileW;
         var m = new ShaderMaterial { Shader = _terrainShader };
         m.SetShaderParameter("heightmap", heightmap);
+        m.SetShaderParameter("kindmap", kindmap);
         m.SetShaderParameter("albedo_tex", _grassTex);
         m.SetShaderParameter("patch_width_m", patchWidth);
         m.SetShaderParameter("height_scale_m", System.Math.Max(1f, maxHeightMeters));

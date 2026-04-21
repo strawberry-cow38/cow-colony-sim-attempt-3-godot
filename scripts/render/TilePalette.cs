@@ -9,6 +9,7 @@ public static class TilePalette
     {
         TileKind.Solid => new Color(0.55f, 0.52f, 0.48f),
         TileKind.Floor => new Color(0.45f, 0.62f, 0.32f),
+        TileKind.Sand  => new Color(0.86f, 0.78f, 0.55f),
         _ => new Color(1, 0, 1),
     };
 }

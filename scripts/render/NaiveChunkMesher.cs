@@ -105,6 +105,9 @@ public sealed class NaiveChunkMesher : IChunkMesher
     public sealed class HeightmapPatch
     {
         public float[,] Heights = null!;
+        // Parallel kind texel per height cell. Empty (0) also marks border
+        // fallback cells so the shader can distinguish unmapped regions.
+        public byte[,] Kinds = null!;
         public int SizeX;
         public int SizeZ;
         public int Revision;
@@ -125,6 +128,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
         // cliffs at the patch's -X / -Z edge where our side is lower have no
         // wall at all and show sky through the gap.
         var heights = new float[sizeX + 2, sizeZ + 2];
+        var kinds = new byte[sizeX + 2, sizeZ + 2];
         var revSum = 0;
         var any = false;
 
@@ -166,13 +170,14 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 var lx = lxStart + lxOff;
                 var lz = lzStart + lzOff;
                 var top = -1;
+                var kind = TileKind.Empty;
                 foreach (var ent in list)
                 {
                     var found = false;
                     for (var ly = size - 1; ly >= 0; ly--)
                     {
                         var t = ent.Snap[lx, ly, lz];
-                        if (!t.IsEmpty) { top = ent.ChunkY * size + ly; found = true; break; }
+                        if (!t.IsEmpty) { top = ent.ChunkY * size + ly; kind = t.Kind; found = true; break; }
                     }
                     if (found) break;
                 }
@@ -180,6 +185,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 {
                     any = true;
                     heights[lxTileBase + lx, lzTileBase + lz] = (top + 1) * th;
+                    kinds[lxTileBase + lx, lzTileBase + lz] = (byte)kind;
                 }
             }
         }
@@ -188,17 +194,20 @@ public sealed class NaiveChunkMesher : IChunkMesher
 
         // Fallback: if any border wasn't provided (world edge, cell not paged
         // in), replicate the nearest interior value so sampling doesn't fetch
-        // zero and collapse the wall. Z first, then X — so corners picked up
-        // by the X pass inherit already-filled Z-border data.
+        // zero and collapse the wall. Use kinds[]==Empty as the unset sentinel
+        // instead of heights[]==0 — now that lake columns legitimately encode
+        // heights==0 (water top at y=-1), the height-zero test misfires.
+        // Z first, then X — so corners picked up by the X pass inherit
+        // already-filled Z-border data.
         for (var x = 1; x <= sizeX; x++)
         {
-            if (heights[x, 0] == 0f) heights[x, 0] = heights[x, 1];
-            if (heights[x, sizeZ + 1] == 0f) heights[x, sizeZ + 1] = heights[x, sizeZ];
+            if (kinds[x, 0] == 0) { heights[x, 0] = heights[x, 1]; kinds[x, 0] = kinds[x, 1]; }
+            if (kinds[x, sizeZ + 1] == 0) { heights[x, sizeZ + 1] = heights[x, sizeZ]; kinds[x, sizeZ + 1] = kinds[x, sizeZ]; }
         }
         for (var z = 0; z <= sizeZ + 1; z++)
         {
-            if (heights[0, z] == 0f) heights[0, z] = heights[1, z];
-            if (heights[sizeX + 1, z] == 0f) heights[sizeX + 1, z] = heights[sizeX, z];
+            if (kinds[0, z] == 0) { heights[0, z] = heights[1, z]; kinds[0, z] = kinds[1, z]; }
+            if (kinds[sizeX + 1, z] == 0) { heights[sizeX + 1, z] = heights[sizeX, z]; kinds[sizeX + 1, z] = kinds[sizeX, z]; }
         }
 
         float maxH = 0f;
@@ -209,6 +218,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
         return new HeightmapPatch
         {
             Heights = heights,
+            Kinds = kinds,
             SizeX = sizeX + 2,
             SizeZ = sizeZ + 2,
             Revision = revSum,
@@ -346,7 +356,11 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 if (!neighborEmpty) continue;
 
                 var cell = n.Y > 0.5f ? topCell : sideCell;
-                EmitFace(verts, normals, colors, uvs, indices, ox, oy, oz, tw, th, n, TileAtlas.TintFor(tile.Kind), cell);
+                // Water tops sit half a tile below the ceiling so the waterline
+                // reads clearly against adjacent land. Only the top face is
+                // offset; side faces (rarely visible) stay full-height.
+                var topDrop = tile.Kind == TileKind.Water ? th * 0.5f : 0f;
+                EmitFace(verts, normals, colors, uvs, indices, ox, oy, oz, tw, th, n, TileAtlas.TintFor(tile.Kind), cell, topDrop);
             }
         }
 
@@ -463,7 +477,10 @@ public sealed class NaiveChunkMesher : IChunkMesher
             var lz = cz * step;
             var ox = lx * tw;
             var oz = lz * tw;
-            var oyTop = (hi + 1) * th;
+            // Water surface sits half a tile below its containing tile's
+            // ceiling so the shore reads as a step above the waterline.
+            var topDrop = kind == TileKind.Water ? th * 0.5f : 0f;
+            var oyTop = (hi + 1) * th - topDrop;
             var spanX = w * step * tw;
             var spanZ = h * step * tw;
 
@@ -638,14 +655,17 @@ public sealed class NaiveChunkMesher : IChunkMesher
         List<Vector2> uvs,
         List<int> indices,
         float ox, float oy, float oz, float tw, float th,
-        Vector3 normal, Color color, int cell)
+        Vector3 normal, Color color, int cell, float topDrop = 0f)
     {
         var baseIndex = verts.Count;
         var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
+        // Top faces optionally drop by topDrop meters so water tops can sit
+        // below the integer tile ceiling. Side faces keep their full height.
+        var thTop = th - topDrop;
         Vector3 v0p, v1p, v2p, v3p;
         if (normal.X > 0.5f)      { v0p = new(ox+tw, oy, oz); v1p = new(ox+tw, oy, oz+tw); v2p = new(ox+tw, oy+th, oz+tw); v3p = new(ox+tw, oy+th, oz); }
         else if (normal.X < -0.5f) { v0p = new(ox, oy, oz+tw); v1p = new(ox, oy, oz); v2p = new(ox, oy+th, oz); v3p = new(ox, oy+th, oz+tw); }
-        else if (normal.Y > 0.5f)  { v0p = new(ox, oy+th, oz); v1p = new(ox+tw, oy+th, oz); v2p = new(ox+tw, oy+th, oz+tw); v3p = new(ox, oy+th, oz+tw); }
+        else if (normal.Y > 0.5f)  { v0p = new(ox, oy+thTop, oz); v1p = new(ox+tw, oy+thTop, oz); v2p = new(ox+tw, oy+thTop, oz+tw); v3p = new(ox, oy+thTop, oz+tw); }
         else if (normal.Y < -0.5f) { v0p = new(ox, oy, oz+tw); v1p = new(ox+tw, oy, oz+tw); v2p = new(ox+tw, oy, oz); v3p = new(ox, oy, oz); }
         else if (normal.Z > 0.5f)  { v0p = new(ox+tw, oy, oz+tw); v1p = new(ox, oy, oz+tw); v2p = new(ox, oy+th, oz+tw); v3p = new(ox+tw, oy+th, oz+tw); }
         else                        { v0p = new(ox, oy, oz); v1p = new(ox+tw, oy, oz); v2p = new(ox+tw, oy+th, oz); v3p = new(ox, oy+th, oz); }
