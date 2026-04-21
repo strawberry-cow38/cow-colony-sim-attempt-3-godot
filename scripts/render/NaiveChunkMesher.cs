@@ -151,12 +151,12 @@ public sealed class NaiveChunkMesher : IChunkMesher
         {
             list.Sort((a, b) => b.ChunkY.CompareTo(a.ChunkY));
             int lxStart, lxCount, lxTileBase;
-            if (cx == -1)                 { lxStart = size - 1; lxCount = 1; lxTileBase = -size; }  // heights[0]
+            if (cx == -1)                 { lxStart = size - 1; lxCount = 1; lxTileBase = 1 - size; }  // heights[0]
             else if (cx == groupChunks)   { lxStart = 0; lxCount = 1; lxTileBase = cx * size + 1; }  // heights[sizeX+1]
             else                          { lxStart = 0; lxCount = size; lxTileBase = cx * size + 1; }
 
             int lzStart, lzCount, lzTileBase;
-            if (cz == -1)                 { lzStart = size - 1; lzCount = 1; lzTileBase = -size; }
+            if (cz == -1)                 { lzStart = size - 1; lzCount = 1; lzTileBase = 1 - size; }
             else if (cz == groupChunks)   { lzStart = 0; lzCount = 1; lzTileBase = cz * size + 1; }
             else                          { lzStart = 0; lzCount = size; lzTileBase = cz * size + 1; }
 
