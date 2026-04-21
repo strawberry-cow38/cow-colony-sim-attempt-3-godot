@@ -103,22 +103,23 @@ public sealed partial class GridRenderer : Node3D
                 var dz = System.Math.Abs(ck.Z - camChunkZ);
                 var d = System.Math.Max(dx, dz);
                 if (d > MaxChunkDistance) continue;
-                if (d <= Tier1Range)
-                {
-                    perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
-                }
-                else if (d <= Tier3Range)
-                {
-                    AddToBucket(g4Masks, GroupKey(ck, Group4), ck);
-                }
-                else if (d <= Tier4Range)
-                {
-                    AddToBucket(g8Masks, GroupKey(ck, Group8), ck);
-                }
-                else
-                {
-                    AddToBucket(g16Masks, GroupKey(ck, Group16), ck);
-                }
+
+                // Group-based classification. A chunk only joins a coarser
+                // group if the ENTIRE group footprint is outside the finer
+                // tier's max range — otherwise the coarser patch overlaps
+                // a finer slot that covers the same ground (z-fighting,
+                // "G8 inside G16"). See group_min_distance helper.
+                var g4Key  = GroupKey(ck, Group4);
+                var g8Key  = GroupKey(ck, Group8);
+                var g16Key = GroupKey(ck, Group16);
+                var g4d  = GroupMinChebyshev(g4Key,  Group4,  camChunkX, camChunkZ);
+                var g8d  = GroupMinChebyshev(g8Key,  Group8,  camChunkX, camChunkZ);
+                var g16d = GroupMinChebyshev(g16Key, Group16, camChunkX, camChunkZ);
+
+                if (g16d > Tier4Range)        AddToBucket(g16Masks, g16Key, ck);
+                else if (g8d  > Tier3Range)   AddToBucket(g8Masks,  g8Key,  ck);
+                else if (g4d  > Tier1Range)   AddToBucket(g4Masks,  g4Key,  ck);
+                else                          perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
             }
         }
         Profiler.End("Classify");
@@ -405,6 +406,17 @@ public sealed partial class GridRenderer : Node3D
     private static TilePos GroupKey(TilePos chunkKey, int groupSize)
     {
         return new TilePos(FloorDiv(chunkKey.X, groupSize) * groupSize, 0, FloorDiv(chunkKey.Z, groupSize) * groupSize);
+    }
+
+    private static int GroupMinChebyshev(TilePos groupKey, int size, int camX, int camZ)
+    {
+        var xMin = groupKey.X;
+        var xMax = groupKey.X + size - 1;
+        var zMin = groupKey.Z;
+        var zMax = groupKey.Z + size - 1;
+        var dx = System.Math.Max(0, System.Math.Max(camX - xMax, xMin - camX));
+        var dz = System.Math.Max(0, System.Math.Max(camZ - zMax, zMin - camZ));
+        return System.Math.Max(dx, dz);
     }
 
     private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);

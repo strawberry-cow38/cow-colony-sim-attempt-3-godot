@@ -53,6 +53,28 @@ public static class ChunkTierSystem
             if (!cells.TryGetValue(cellKey, out var cur) || kv.Value > cur)
                 cells[cellKey] = kv.Value;
         }
+
+        // Render-radius halo: cells within CellRenderHaloCells of any Live cell
+        // stay at least Ambient so CellPagingSystem does not evict terrain that
+        // GridRenderer is still drawing. Without this, cells outside the 1-chunk
+        // chunk-tier halo go Dormant, page out after 30s, and the world visibly
+        // shrinks around the camera.
+        var liveCells = new List<CellKey>();
+        foreach (var kv in cells)
+            if (kv.Value == ChunkState.Live) liveCells.Add(kv.Key);
+        const int r = SimConstants.CellRenderHaloCells;
+        foreach (var lc in liveCells)
+        {
+            for (var dx = -r; dx <= r; dx++)
+            for (var dz = -r; dz <= r; dz++)
+            {
+                if (dx == 0 && dz == 0) continue;
+                var k = lc.Offset(dx, dz);
+                if (!cells.TryGetValue(k, out var cur) || cur < ChunkState.Ambient)
+                    cells[k] = ChunkState.Ambient;
+            }
+        }
+
         tiles.ReplaceCellStates(cells);
     }
 

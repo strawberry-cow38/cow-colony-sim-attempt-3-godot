@@ -63,7 +63,30 @@ public class CellTests
         ChunkTierSystem.Step(world, tiles);
 
         Assert.Equal(ChunkState.Live, tiles.GetCellState(new CellKey(0, 0)));
-        Assert.Equal(ChunkState.Dormant, tiles.GetCellState(new CellKey(5, 5)));
+        Assert.Equal(ChunkState.Ambient, tiles.GetCellState(new CellKey(5, 5)));
+        // Beyond the render-halo radius, cells remain Dormant.
+        Assert.Equal(ChunkState.Dormant, tiles.GetCellState(new CellKey(SimConstants.CellRenderHaloCells + 1, 0)));
+    }
+
+    [Fact]
+    public void Cell_Render_Halo_Marks_Neighbours_Ambient()
+    {
+        var world = new World();
+        var tiles = new TileWorld();
+        world.Spawn().Add(new LiveAnchor(new TilePos(0, 0, 0), 1));
+
+        ChunkTierSystem.Step(world, tiles);
+
+        var r = SimConstants.CellRenderHaloCells;
+        for (var dx = -r; dx <= r; dx++)
+        for (var dz = -r; dz <= r; dz++)
+        {
+            if (dx == 0 && dz == 0) continue;
+            var state = tiles.GetCellState(new CellKey(dx, dz));
+            Assert.True(state >= ChunkState.Ambient,
+                $"halo cell ({dx},{dz}) expected Ambient, got {state}");
+        }
+        Assert.Equal(ChunkState.Dormant, tiles.GetCellState(new CellKey(r + 1, 0)));
     }
 
     [Fact]

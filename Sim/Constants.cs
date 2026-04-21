@@ -24,6 +24,11 @@ public static class SimConstants
     public const int CellSizeChunks = 16;
     public const int CellSizeTiles = CellSizeChunks * ChunkSize;
 
+    // Cells within this many cells of a Live cell stay at least Ambient.
+    // Keeps render-radius terrain resident; paging only evicts past this halo.
+    // Matches renderer MaxChunkDistance=128 chunks ÷ 16 = 8, plus 1-cell buffer.
+    public const int CellRenderHaloCells = 9;
+
     public const int SecondsPerDay = 60 * 24;
     public const int TicksPerDay = SimHz * SecondsPerDay;
 
