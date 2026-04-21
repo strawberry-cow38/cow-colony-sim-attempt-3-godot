@@ -169,10 +169,10 @@ public sealed class TileWorld
     /// platform; tile (x+1, z) renders its west edge corners at
     /// <paramref name="lowerHeight"/> instead of the shared heightmap value.
     /// </summary>
-    public void SetTerrainCliffE(int x, int z, short lowerHeight)
+    public void SetTerrainCliffE(int x, int z, short upperHeight, short lowerHeight)
     {
         var (cx, cz, lx, lz) = SplitXZ(x, z);
-        GetOrCreateTerrainChunk(cx, cz).SetCliffE(lx, lz, lowerHeight);
+        GetOrCreateTerrainChunk(cx, cz).SetCliffE(lx, lz, upperHeight, lowerHeight);
         MutationTick++;
     }
 
@@ -180,10 +180,10 @@ public sealed class TileWorld
     /// Flag the south edge of tile (x, z) as a cliff. Upper platform is
     /// (x, z); tile (x, z+1) is the lower floor.
     /// </summary>
-    public void SetTerrainCliffS(int x, int z, short lowerHeight)
+    public void SetTerrainCliffS(int x, int z, short upperHeight, short lowerHeight)
     {
         var (cx, cz, lx, lz) = SplitXZ(x, z);
-        GetOrCreateTerrainChunk(cx, cz).SetCliffS(lx, lz, lowerHeight);
+        GetOrCreateTerrainChunk(cx, cz).SetCliffS(lx, lz, upperHeight, lowerHeight);
         MutationTick++;
     }
 
@@ -212,6 +212,8 @@ public sealed class TileWorld
             snap.CliffMask[lx, lz] = ownMask;
             snap.CliffLowerE[lx, lz] = tc.CliffLowerE[lx, lz];
             snap.CliffLowerS[lx, lz] = tc.CliffLowerS[lx, lz];
+            snap.CliffUpperE[lx, lz] = tc.CliffUpperE[lx, lz];
+            snap.CliffUpperS[lx, lz] = tc.CliffUpperS[lx, lz];
         }
         _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
         _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);

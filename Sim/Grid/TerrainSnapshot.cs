@@ -35,6 +35,12 @@ public sealed class TerrainSnapshot
     public readonly short[,] CliffLowerS = new short[Size, Size];
     public readonly short[,] CliffLowerW = new short[Size, Size];
     public readonly short[,] CliffLowerN = new short[Size, Size];
+    // Per-tile upper-platform heights (meaningful when the matching mask bit
+    // is set). The mesher uses these to hoist the upper tile's top face to
+    // the platform height locally — without bumping shared heightmap corners,
+    // which would spike diagonal-adjacent tiles.
+    public readonly short[,] CliffUpperE = new short[Size, Size];
+    public readonly short[,] CliffUpperS = new short[Size, Size];
 
     public const byte CliffBitE = 1 << 0;
     public const byte CliffBitS = 1 << 1;

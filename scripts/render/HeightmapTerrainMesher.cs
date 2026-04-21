@@ -55,8 +55,24 @@ public sealed class HeightmapTerrainMesher
             short h11 = snap.Heights[lx + 1, lz + 1];
             short h01 = snap.Heights[lx,     lz + 1];
 
+            // E cliff: I am the upper side. Hoist my east corners (SE, NE)
+            // to my own platform height locally — without touching shared
+            // heightmap corners (which would spike diagonal-adjacent tiles).
+            if ((mask & TerrainSnapshot.CliffBitE) != 0)
+            {
+                var upper = snap.CliffUpperE[lx, lz];
+                if (upper > h10) h10 = upper;
+                if (upper > h11) h11 = upper;
+            }
+            // S cliff: I am upper on S. Hoist NW and NE to platform height.
+            if ((mask & TerrainSnapshot.CliffBitS) != 0)
+            {
+                var upper = snap.CliffUpperS[lx, lz];
+                if (upper > h01) h01 = upper;
+                if (upper > h11) h11 = upper;
+            }
             // W cliff: I am the lower side. Pull my west corners (SW, NW)
-            // down from the upper shared height to my own cliff-lower.
+            // down from whatever natural corner height to my own cliff-lower.
             if ((mask & TerrainSnapshot.CliffBitW) != 0)
             {
                 var lower = snap.CliffLowerW[lx, lz];
@@ -122,27 +138,25 @@ public sealed class HeightmapTerrainMesher
             // corners down; it never emits a face.
             if ((mask & TerrainSnapshot.CliffBitE) != 0)
             {
-                var upperSE = snap.Heights[lx + 1, lz    ] * th;
-                var upperNE = snap.Heights[lx + 1, lz + 1] * th;
-                var lowerY  = snap.CliffLowerE[lx, lz] * th;
+                var upperY = snap.CliffUpperE[lx, lz] * th;
+                var lowerY = snap.CliffLowerE[lx, lz] * th;
                 EmitCliffFace(verts, normals, colors, uvs, indices,
-                    new Vector3(x1, lowerY,  z0),
-                    new Vector3(x1, upperSE, z0),
-                    new Vector3(x1, upperNE, z1),
-                    new Vector3(x1, lowerY,  z1),
+                    new Vector3(x1, lowerY, z0),
+                    new Vector3(x1, upperY, z0),
+                    new Vector3(x1, upperY, z1),
+                    new Vector3(x1, lowerY, z1),
                     new Vector3(1f, 0f, 0f),
                     kind);
             }
             if ((mask & TerrainSnapshot.CliffBitS) != 0)
             {
-                var upperSW = snap.Heights[lx,     lz + 1] * th;
-                var upperSE = snap.Heights[lx + 1, lz + 1] * th;
-                var lowerY  = snap.CliffLowerS[lx, lz] * th;
+                var upperY = snap.CliffUpperS[lx, lz] * th;
+                var lowerY = snap.CliffLowerS[lx, lz] * th;
                 EmitCliffFace(verts, normals, colors, uvs, indices,
-                    new Vector3(x1, lowerY,  z1),
-                    new Vector3(x1, upperSE, z1),
-                    new Vector3(x0, upperSW, z1),
-                    new Vector3(x0, lowerY,  z1),
+                    new Vector3(x1, lowerY, z1),
+                    new Vector3(x1, upperY, z1),
+                    new Vector3(x0, upperY, z1),
+                    new Vector3(x0, lowerY, z1),
                     new Vector3(0f, 0f, 1f),
                     kind);
             }

@@ -173,11 +173,10 @@ public static class WorldGen
 
         // Cliff detection pass. Scan every tile edge in the generated
         // footprint; where the step between adjacent columns reaches
-        // CliffMinDelta the upper tile owns the flag. Shared corners on that
-        // edge are bumped to the upper tile's column height so stored heights
-        // consistently describe the upper platform; the lower-side tile uses
-        // its CliffLowerW/N snapshot override to pull its corners back to its
-        // own (lower) height at render time.
+        // CliffMinDelta the upper tile owns the flag and stores its own
+        // platform height (used by the mesher to hoist the upper tile's top
+        // face locally). Shared heightmap corners stay at natural column
+        // values so diagonal-adjacent tiles don't spike up.
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
@@ -189,26 +188,14 @@ public static class WorldGen
             {
                 var hEast = heights[xi + 1, zi];
                 if (hHere - hEast >= CliffMinDelta)
-                {
-                    tiles.SetTerrainCliffE(x, z, (short)hEast);
-                    if (tiles.TerrainHeightAt(x + 1, z) < hHere)
-                        tiles.SetTerrainHeight(x + 1, z, (short)hHere);
-                    if (tiles.TerrainHeightAt(x + 1, z + 1) < hHere)
-                        tiles.SetTerrainHeight(x + 1, z + 1, (short)hHere);
-                }
+                    tiles.SetTerrainCliffE(x, z, (short)hHere, (short)hEast);
             }
 
             if (zi + 1 < sizeZ)
             {
                 var hSouth = heights[xi, zi + 1];
                 if (hHere - hSouth >= CliffMinDelta)
-                {
-                    tiles.SetTerrainCliffS(x, z, (short)hSouth);
-                    if (tiles.TerrainHeightAt(x, z + 1) < hHere)
-                        tiles.SetTerrainHeight(x, z + 1, (short)hHere);
-                    if (tiles.TerrainHeightAt(x + 1, z + 1) < hHere)
-                        tiles.SetTerrainHeight(x + 1, z + 1, (short)hHere);
-                }
+                    tiles.SetTerrainCliffS(x, z, (short)hHere, (short)hSouth);
             }
         }
         return surfaceTiles;

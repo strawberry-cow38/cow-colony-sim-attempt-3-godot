@@ -57,6 +57,20 @@ public sealed class TerrainChunk
     /// </summary>
     public readonly short[,] CliffLowerS = new short[Size, Size];
 
+    /// <summary>
+    /// East-edge upper-platform height — the Y the upper tile renders its SE
+    /// and NE corners at. Lets the mesher hoist the top face locally without
+    /// bumping shared corners (which would spike diagonal-adjacent tiles).
+    /// Meaningful only when the matching <see cref="CliffMask"/> bit is set.
+    /// </summary>
+    public readonly short[,] CliffUpperE = new short[Size, Size];
+
+    /// <summary>
+    /// South-edge upper-platform height — mirror of <see cref="CliffUpperE"/>
+    /// for south cliffs. Overrides this tile's NW and NE corners when rendering.
+    /// </summary>
+    public readonly short[,] CliffUpperS = new short[Size, Size];
+
     public const byte CliffBitE = 1 << 0;
     public const byte CliffBitS = 1 << 1;
 
@@ -76,21 +90,27 @@ public sealed class TerrainChunk
         Revision++;
     }
 
-    public void SetCliffE(int lx, int lz, short lowerHeight)
+    public void SetCliffE(int lx, int lz, short upperHeight, short lowerHeight)
     {
         var mask = (byte)(CliffMask[lx, lz] | CliffBitE);
-        if (CliffMask[lx, lz] == mask && CliffLowerE[lx, lz] == lowerHeight) return;
+        if (CliffMask[lx, lz] == mask
+            && CliffLowerE[lx, lz] == lowerHeight
+            && CliffUpperE[lx, lz] == upperHeight) return;
         CliffMask[lx, lz] = mask;
         CliffLowerE[lx, lz] = lowerHeight;
+        CliffUpperE[lx, lz] = upperHeight;
         Revision++;
     }
 
-    public void SetCliffS(int lx, int lz, short lowerHeight)
+    public void SetCliffS(int lx, int lz, short upperHeight, short lowerHeight)
     {
         var mask = (byte)(CliffMask[lx, lz] | CliffBitS);
-        if (CliffMask[lx, lz] == mask && CliffLowerS[lx, lz] == lowerHeight) return;
+        if (CliffMask[lx, lz] == mask
+            && CliffLowerS[lx, lz] == lowerHeight
+            && CliffUpperS[lx, lz] == upperHeight) return;
         CliffMask[lx, lz] = mask;
         CliffLowerS[lx, lz] = lowerHeight;
+        CliffUpperS[lx, lz] = upperHeight;
         Revision++;
     }
 
@@ -99,6 +119,7 @@ public sealed class TerrainChunk
         if ((CliffMask[lx, lz] & CliffBitE) == 0) return;
         CliffMask[lx, lz] &= unchecked((byte)~CliffBitE);
         CliffLowerE[lx, lz] = 0;
+        CliffUpperE[lx, lz] = 0;
         Revision++;
     }
 
@@ -107,6 +128,7 @@ public sealed class TerrainChunk
         if ((CliffMask[lx, lz] & CliffBitS) == 0) return;
         CliffMask[lx, lz] &= unchecked((byte)~CliffBitS);
         CliffLowerS[lx, lz] = 0;
+        CliffUpperS[lx, lz] = 0;
         Revision++;
     }
 }
