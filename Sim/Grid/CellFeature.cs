@@ -43,13 +43,16 @@ public sealed class FeatureNoises
     public readonly FastNoiseLite Hills;
     public readonly FastNoiseLite Mountains;
     public readonly FastNoiseLite Lake;
+    public readonly FastNoiseLite Cubby;
 
     public FeatureNoises(int seed)
     {
         Plains    = Make(seed + 1, 0.020f, 2);
-        Hills     = Make(seed + 2, 0.012f, 4);
-        Mountains = Make(seed + 3, 0.008f, 5);
+        Hills     = Make(seed + 2, 0.010f, 4);
+        Mountains = Make(seed + 3, 0.006f, 5);
         Lake      = Make(seed + 4, 0.030f, 2);
+        // Low-frequency mask for flat cubbies / outpost pockets.
+        Cubby     = Make(seed + 5, 0.035f, 2);
     }
 
     private static FastNoiseLite Make(int seed, float freq, int oct)
@@ -69,15 +72,16 @@ public sealed class FeatureNoises
         switch (f)
         {
             case CellFeature.Plains:
-                return 3f + (Plains.GetNoise(x, z) + 1f) * 0.5f * 5f;
+                return 3f + (Plains.GetNoise(x, z) + 1f) * 0.5f * 7f;
             case CellFeature.Hills:
-                return 4f + (Hills.GetNoise(x, z) + 1f) * 0.5f * 18f;
+                return 4f + (Hills.GetNoise(x, z) + 1f) * 0.5f * 36f;
             case CellFeature.Mountains:
             {
                 var n = Mountains.GetNoise(x, z);
                 var ridged = 1f - System.MathF.Abs(n);
                 ridged *= ridged;
-                return 6f + ridged * 44f;
+                // 6..100 raw ridged height — terracing applied post-bilerp.
+                return 6f + ridged * 94f;
             }
             case CellFeature.Lake:
                 return 1f + (Lake.GetNoise(x, z) + 1f) * 0.5f * 1.5f;

@@ -71,8 +71,10 @@ public class WorldGenTests
             if (step > maxStep) maxStep = step;
         }
         // Bilerp of 4 continuous features — step between adjacent tiles must
-        // stay small. A hard cell-border seam would produce steps > 10.
-        Assert.True(maxStep <= 5, $"max per-tile step {maxStep} > 5");
+        // stay small. A hard cell-border seam would produce >> PlateauStep.
+        // Mountain plateau terrace allows a single 10-tile band jump at ramp
+        // edges plus cubby ramps; anything past that is a seam.
+        Assert.True(maxStep <= 12, $"max per-tile step {maxStep} > 12");
     }
 
     [Fact]
