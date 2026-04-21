@@ -19,9 +19,13 @@ public static class GpuTerrain
     /// between adjacent cells. Every vert of a cell's top quad samples the same
     /// cell-center UV, so all 4 verts get the same height — producing flat
     /// plateaus with vertical cliffs where neighbors differ. Walls are emitted
-    /// per-side (4 per cell) and backface-cull when the neighbor is taller.
+    /// per-side (4 per cell). The heightmap texture has a 1-pixel border in
+    /// every direction carrying neighbor-group tile heights, so all four wall
+    /// sides (not just +X/+Z) can sample true neighbor height at the patch
+    /// edge; otherwise cliffs at group seams where our side is lower would
+    /// have no wall and show sky through the gap.
     /// </summary>
-    public static ArrayMesh BuildPatchMeshStepped(int cellsPerSide, float patchWidthMeters)
+    public static ArrayMesh BuildPatchMeshStepped(int cellsPerSide, float patchWidthMeters, int heightmapInteriorSize)
     {
         var cell = patchWidthMeters / cellsPerSide;
         var totalCells = cellsPerSide * cellsPerSide;
@@ -34,7 +38,13 @@ public static class GpuTerrain
 
         var vi = 0;
         var ii = 0;
-        var invN = 1.0f / cellsPerSide;
+        // Texture is heightmapInteriorSize+2 pixels per side: own tiles at
+        // [1..S], neighbor borders at 0 and S+1. Cell cx spans S/N pixels of
+        // own tiles; cell-center sample lands at pixel (cx+0.5)*S/N + 1, which
+        // in UV space is ((cx+0.5)*S/N + 1) / (S+2).
+        float S = heightmapInteriorSize;
+        float invTex = 1.0f / (S + 2f);
+        float pixPerCell = S / cellsPerSide;
         // Center verts around the MeshInstance origin so Godot's
         // VisibilityRangeBegin (measured cam→origin, not cam→AABB) corresponds
         // to the patch midpoint rather than a corner. Straddling groups would
@@ -48,7 +58,9 @@ public static class GpuTerrain
             var x1 = x0 + cell;
             var z0 = cz * cell - half;
             var z1 = z0 + cell;
-            var ownUv = new Vector2((cx + 0.5f) * invN, (cz + 0.5f) * invN);
+            var ownUv = new Vector2(
+                ((cx + 0.5f) * pixPerCell + 1f) * invTex,
+                ((cz + 0.5f) * pixPerCell + 1f) * invTex);
 
             // Top quad: 4 verts at corners, all tagged with ownUv so they land at
             // the same height. Winding faces +Y.
@@ -61,11 +73,11 @@ public static class GpuTerrain
             indices[ii++] = t0 + 1; indices[ii++] = t0 + 2; indices[ii++] = t0 + 3;
 
             // +X side: neighbor (cx+1, cz). Top verts sample ownUv, bottom verts
-            // sample neighbor UV — when own > nbr the wall shows; otherwise the
-            // triangle flips and is backface-culled. At the group edge we sample
-            // past uv=1.0 so clamp_to_edge picks up the neighbor-group border
-            // sample BuildGroupHeightmapPatch wrote into heights[sizeX, *].
-            var nbrPxUv = new Vector2((cx + 1.5f) * invN, (cz + 0.5f) * invN);
+            // sample neighbor UV. At the group edge (cx=N-1) the UV walks past
+            // the interior, clamping to pixel S+1 = +X neighbor's first tile.
+            var nbrPxUv = new Vector2(
+                ((cx + 1.5f) * pixPerCell + 1f) * invTex,
+                ((cz + 0.5f) * pixPerCell + 1f) * invTex);
             var wPx = vi;
             vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi++] = ownUv;
             vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi++] = ownUv;
@@ -74,10 +86,12 @@ public static class GpuTerrain
             indices[ii++] = wPx + 0; indices[ii++] = wPx + 1; indices[ii++] = wPx + 2;
             indices[ii++] = wPx + 2; indices[ii++] = wPx + 1; indices[ii++] = wPx + 3;
 
-            // -X side: neighbor (cx-1, cz).
-            var nbrNxUv = cx - 1 >= 0
-                ? new Vector2((cx - 0.5f) * invN, (cz + 0.5f) * invN)
-                : ownUv;
+            // -X side: neighbor (cx-1, cz). At cx=0 the UV walks negative and
+            // clamps to pixel 0 = -X neighbor's last tile, so the wall is never
+            // degenerate at the patch left edge.
+            var nbrNxUv = new Vector2(
+                ((cx - 0.5f) * pixPerCell + 1f) * invTex,
+                ((cz + 0.5f) * pixPerCell + 1f) * invTex);
             var wNx = vi;
             vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi++] = ownUv;
             vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi++] = ownUv;
@@ -86,9 +100,10 @@ public static class GpuTerrain
             indices[ii++] = wNx + 0; indices[ii++] = wNx + 2; indices[ii++] = wNx + 1;
             indices[ii++] = wNx + 1; indices[ii++] = wNx + 2; indices[ii++] = wNx + 3;
 
-            // +Z side: neighbor (cx, cz+1). Edge sample clamps past uv=1.0 to
-            // heights[*, sizeZ] — the +Z neighbor group's border sample.
-            var nbrPzUv = new Vector2((cx + 0.5f) * invN, (cz + 1.5f) * invN);
+            // +Z side: neighbor (cx, cz+1).
+            var nbrPzUv = new Vector2(
+                ((cx + 0.5f) * pixPerCell + 1f) * invTex,
+                ((cz + 1.5f) * pixPerCell + 1f) * invTex);
             var wPz = vi;
             vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi++] = ownUv;
             vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi++] = ownUv;
@@ -98,9 +113,9 @@ public static class GpuTerrain
             indices[ii++] = wPz + 1; indices[ii++] = wPz + 2; indices[ii++] = wPz + 3;
 
             // -Z side: neighbor (cx, cz-1).
-            var nbrNzUv = cz - 1 >= 0
-                ? new Vector2((cx + 0.5f) * invN, (cz - 0.5f) * invN)
-                : ownUv;
+            var nbrNzUv = new Vector2(
+                ((cx + 0.5f) * pixPerCell + 1f) * invTex,
+                ((cz - 0.5f) * pixPerCell + 1f) * invTex);
             var wNz = vi;
             vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi++] = ownUv;
             vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi++] = ownUv;

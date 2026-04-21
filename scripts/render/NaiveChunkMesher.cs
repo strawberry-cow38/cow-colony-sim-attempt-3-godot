@@ -118,7 +118,13 @@ public sealed class NaiveChunkMesher : IChunkMesher
         var size = Chunk.Size;
         var sizeX = groupChunks * size;
         var sizeZ = groupChunks * size;
-        var heights = new float[sizeX + 1, sizeZ + 1];
+        // Texture is sizeX+2 × sizeZ+2: own tiles at heights[1..sizeX, 1..sizeZ];
+        // 1-pixel border on every side carries the adjacent neighbor group's
+        // first/last tile column or row. Border data lets the stepped patch
+        // mesh emit non-degenerate walls on ALL four group seams — otherwise
+        // cliffs at the patch's -X / -Z edge where our side is lower have no
+        // wall at all and show sky through the gap.
+        var heights = new float[sizeX + 2, sizeZ + 2];
         var revSum = 0;
         var any = false;
 
@@ -135,19 +141,30 @@ public sealed class NaiveChunkMesher : IChunkMesher
         }
 
         var th = TileCoord.TileH;
-        // cx/cz may reach groupChunks — those are border entries carrying the
-        // first tile column/row of the +X / +Z / corner neighbor group. They
-        // populate the last col/row of the heights array so stepped-patch
-        // walls at group seams have true neighbor height on the other side
-        // instead of a degenerate self-sample.
+        // cx/cz = -1 → border entry from the -X / -Z neighbor group (only its
+        // last tile col/row is sampled, written to heights[0, ..] / heights[.., 0]).
+        // cx/cz in [0, groupChunks-1] → own group chunks, all tiles sampled,
+        // written to heights[cx*size+lx+1, cz*size+lz+1].
+        // cx/cz = groupChunks → +X / +Z neighbor border (first tile col/row),
+        // written to heights[sizeX+1, ..] / heights[.., sizeZ+1].
         foreach (var ((cx, cz), list) in byCol)
         {
             list.Sort((a, b) => b.ChunkY.CompareTo(a.ChunkY));
-            var lxMax = cx < groupChunks ? size : 1;
-            var lzMax = cz < groupChunks ? size : 1;
-            for (var lz = 0; lz < lzMax; lz++)
-            for (var lx = 0; lx < lxMax; lx++)
+            int lxStart, lxCount, lxTileBase;
+            if (cx == -1)                 { lxStart = size - 1; lxCount = 1; lxTileBase = -size; }  // heights[0]
+            else if (cx == groupChunks)   { lxStart = 0; lxCount = 1; lxTileBase = cx * size + 1; }  // heights[sizeX+1]
+            else                          { lxStart = 0; lxCount = size; lxTileBase = cx * size + 1; }
+
+            int lzStart, lzCount, lzTileBase;
+            if (cz == -1)                 { lzStart = size - 1; lzCount = 1; lzTileBase = -size; }
+            else if (cz == groupChunks)   { lzStart = 0; lzCount = 1; lzTileBase = cz * size + 1; }
+            else                          { lzStart = 0; lzCount = size; lzTileBase = cz * size + 1; }
+
+            for (var lzOff = 0; lzOff < lzCount; lzOff++)
+            for (var lxOff = 0; lxOff < lxCount; lxOff++)
             {
+                var lx = lxStart + lxOff;
+                var lz = lzStart + lzOff;
                 var top = -1;
                 foreach (var ent in list)
                 {
@@ -162,29 +179,38 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 if (top >= 0)
                 {
                     any = true;
-                    heights[cx * size + lx, cz * size + lz] = (top + 1) * th;
+                    heights[lxTileBase + lx, lzTileBase + lz] = (top + 1) * th;
                 }
             }
         }
 
         if (!any) return null;
 
-        // Fallback: if a border entry was missing (edge of world, cell not
-        // paged in), replicate own last col/row so sampling at uv=1 still
-        // clamps to a sane value rather than zero.
-        for (var z = 0; z < sizeZ; z++) if (heights[sizeX, z] == 0f) heights[sizeX, z] = heights[sizeX - 1, z];
-        for (var x = 0; x <= sizeX; x++) if (heights[x, sizeZ] == 0f) heights[x, sizeZ] = heights[x, sizeZ - 1];
+        // Fallback: if any border wasn't provided (world edge, cell not paged
+        // in), replicate the nearest interior value so sampling doesn't fetch
+        // zero and collapse the wall. Z first, then X — so corners picked up
+        // by the X pass inherit already-filled Z-border data.
+        for (var x = 1; x <= sizeX; x++)
+        {
+            if (heights[x, 0] == 0f) heights[x, 0] = heights[x, 1];
+            if (heights[x, sizeZ + 1] == 0f) heights[x, sizeZ + 1] = heights[x, sizeZ];
+        }
+        for (var z = 0; z <= sizeZ + 1; z++)
+        {
+            if (heights[0, z] == 0f) heights[0, z] = heights[1, z];
+            if (heights[sizeX + 1, z] == 0f) heights[sizeX + 1, z] = heights[sizeX, z];
+        }
 
         float maxH = 0f;
-        for (var z = 0; z <= sizeZ; z++)
-            for (var x = 0; x <= sizeX; x++)
+        for (var z = 0; z <= sizeZ + 1; z++)
+            for (var x = 0; x <= sizeX + 1; x++)
                 if (heights[x, z] > maxH) maxH = heights[x, z];
 
         return new HeightmapPatch
         {
             Heights = heights,
-            SizeX = sizeX + 1,
-            SizeZ = sizeZ + 1,
+            SizeX = sizeX + 2,
+            SizeZ = sizeZ + 2,
             Revision = revSum,
             LodLevel = lodLevel,
             MaxHeightMeters = maxH,

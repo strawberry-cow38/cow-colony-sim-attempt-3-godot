@@ -76,8 +76,8 @@ public sealed partial class GridRenderer : Node3D
             var g8Width  = Group8  * Chunk.Size * TileCoord.TileW;
             var g4Width  = Group4  * Chunk.Size * TileCoord.TileW;
             // G8 and G4 are stepped — matches blocky look of L0/L1 at tier boundaries.
-            _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width);
-            _g4PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G4CellsPerSide, g4Width);
+            _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width, Group8 * Chunk.Size);
+            _g4PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G4CellsPerSide, g4Width, Group4 * Chunk.Size);
 
             if (!RenderingServer.GlobalShaderParameterGetList().Any(n => n.ToString() == "gimbal_pos"))
             {
@@ -564,9 +564,11 @@ public sealed partial class GridRenderer : Node3D
         }
     }
 
-    // Iterate chunk keys at the +X, +Z, and corner border of a group, one per
-    // (lateral, Y) position, at the group's existing Y levels. Local coords
-    // use Lx/Lz = groupSize to signal the border to BuildGroupHeightmapPatch.
+    // Iterate chunk keys around the whole border of a group (±X, ±Z, and the
+    // four diagonal corners), one per (lateral, Y) position, at the group's
+    // existing Y levels. Local coords use Lx/Lz = -1 for the -X / -Z border
+    // and Lx/Lz = groupSize for +X / +Z — BuildGroupHeightmapPatch decodes
+    // both to the texture-border slot for that side.
     private void ForEachBorderChunk(HashSet<int> yLevels, TilePos groupKey, int groupSize,
         System.Action<int, int, int, Chunk> visit)
     {
@@ -576,16 +578,43 @@ public sealed partial class GridRenderer : Node3D
             var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z + cz));
             if (c != null) visit(groupSize, cz, y, c);
         }
+        for (var cz = 0; cz < groupSize; cz++)
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X - 1, y, groupKey.Z + cz));
+            if (c != null) visit(-1, cz, y, c);
+        }
         for (var cx = 0; cx < groupSize; cx++)
         foreach (var y in yLevels)
         {
             var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + cx, y, groupKey.Z + groupSize));
             if (c != null) visit(cx, groupSize, y, c);
         }
+        for (var cx = 0; cx < groupSize; cx++)
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + cx, y, groupKey.Z - 1));
+            if (c != null) visit(cx, -1, y, c);
+        }
         foreach (var y in yLevels)
         {
             var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z + groupSize));
             if (c != null) visit(groupSize, groupSize, y, c);
+        }
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X - 1, y, groupKey.Z + groupSize));
+            if (c != null) visit(-1, groupSize, y, c);
+        }
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z - 1));
+            if (c != null) visit(groupSize, -1, y, c);
+        }
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X - 1, y, groupKey.Z - 1));
+            if (c != null) visit(-1, -1, y, c);
         }
     }
 
@@ -593,11 +622,12 @@ public sealed partial class GridRenderer : Node3D
         ref long maskHash, ref long revHash)
     {
         long mh = maskHash, rh = revHash;
+        var stride = groupSize + 2;
         ForEachBorderChunk(yLevels, groupKey, groupSize, (lx, lz, y, c) =>
         {
             unchecked
             {
-                mh = mh * 31 + ((lx * (groupSize + 1) + lz) * 1024 + y + 1);
+                mh = mh * 31 + (((lx + 1) * stride + (lz + 1)) * 1024 + y + 1);
                 rh += c.Revision;
             }
         });
