@@ -94,15 +94,17 @@ public class WorldGenTests
         var world = new TileWorld();
         WorldGen.Generate(world, seed: 1234, sizeX: 32, sizeZ: 32);
 
-        // Every column in the generated footprint must carry a terrain
-        // height matching the voxel surface (column top = height - 1, so
-        // stored corner height = height).
+        // Every column in the generated footprint carries a terrain height
+        // at or above its voxel surface. Cliff pass bumps shared corners up
+        // to their upper-tile neighbor's column height, so a given corner
+        // can exceed its own column's surface — but never fall below it.
         for (var x = -16; x < 16; x++)
         for (var z = -16; z < 16; z++)
         {
             var h = world.TerrainHeightAt(x, z);
             var surfaceY = WorldGen.SurfaceY(world, x, z);
-            Assert.Equal(surfaceY, h);
+            Assert.True(h >= surfaceY,
+                $"corner ({x},{z}): stored {h} < surface {surfaceY}");
         }
     }
 
@@ -399,8 +401,10 @@ public class WorldGenTests
     public void Generate_Cliff_Edge_Corners_Match_Upper_Height()
     {
         // For every E / S cliff flagged by worldgen, the shared corners on
-        // that edge must be stored at the upper tile's own column height —
-        // so the mesher can read "stored = upper" without cross-tile math.
+        // that edge must sit at or above the upper tile's own voxel surface
+        // (cliff pass bumps them up; neighboring cliffs may bump a corner
+        // even higher, so use >= not ==). CliffLower stores the true lower
+        // neighbor's height and must be strictly below the upper surface.
         var world = new TileWorld();
         WorldGen.Generate(world, seed: 42, sizeX: 128, sizeZ: 128);
 
@@ -416,18 +420,22 @@ public class WorldGenTests
             var mask = tc.CliffMask[lx, lz];
             if ((mask & TerrainChunk.CliffBitE) != 0)
             {
-                var upper = world.TerrainHeightAt(x, z);
-                Assert.Equal(upper, world.TerrainHeightAt(x + 1, z));
-                Assert.Equal(upper, world.TerrainHeightAt(x + 1, z + 1));
+                var upper = WorldGen.SurfaceY(world, x, z);
+                Assert.True(world.TerrainHeightAt(x + 1, z) >= upper,
+                    $"E cliff at ({x},{z}): SE corner {world.TerrainHeightAt(x + 1, z)} < upper {upper}");
+                Assert.True(world.TerrainHeightAt(x + 1, z + 1) >= upper,
+                    $"E cliff at ({x},{z}): NE corner {world.TerrainHeightAt(x + 1, z + 1)} < upper {upper}");
                 Assert.True(tc.CliffLowerE[lx, lz] < upper,
                     $"E cliff at ({x},{z}): lower {tc.CliffLowerE[lx, lz]} must be < upper {upper}");
                 checkedCliffs++;
             }
             if ((mask & TerrainChunk.CliffBitS) != 0)
             {
-                var upper = world.TerrainHeightAt(x, z);
-                Assert.Equal(upper, world.TerrainHeightAt(x, z + 1));
-                Assert.Equal(upper, world.TerrainHeightAt(x + 1, z + 1));
+                var upper = WorldGen.SurfaceY(world, x, z);
+                Assert.True(world.TerrainHeightAt(x, z + 1) >= upper,
+                    $"S cliff at ({x},{z}): SW corner {world.TerrainHeightAt(x, z + 1)} < upper {upper}");
+                Assert.True(world.TerrainHeightAt(x + 1, z + 1) >= upper,
+                    $"S cliff at ({x},{z}): SE corner {world.TerrainHeightAt(x + 1, z + 1)} < upper {upper}");
                 Assert.True(tc.CliffLowerS[lx, lz] < upper,
                     $"S cliff at ({x},{z}): lower {tc.CliffLowerS[lx, lz]} must be < upper {upper}");
                 checkedCliffs++;
