@@ -1,5 +1,8 @@
 shader_type spatial;
-render_mode cull_back, diffuse_lambert_wrap, specular_disabled, shadows_disabled;
+// Stepped G8 patches put two coincident wall faces per cell boundary with
+// opposite winding — neither side is reliably "front". Render both so we
+// never see gaps when a cliff's far side is back-facing the camera.
+render_mode cull_disabled, diffuse_lambert_wrap, specular_disabled, shadows_disabled;
 
 // Heightmap tier (G4/G8/G16): single fixed-topology flat grid in local space
 // is displaced along +Y by sampling an R16 (as sampler2D, red channel) heightmap.
@@ -14,7 +17,7 @@ uniform float patch_width_m = 384.0;
 // Vertical scale: heightmap R channel (0..1) maps to [0, height_scale_m] meters.
 uniform float height_scale_m = 192.0;
 // Tint for debug / palette.
-uniform vec4 tint : source_color = vec4(0.35, 0.65, 0.25, 1.0);
+uniform vec4 tint : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 
 varying vec3 v_world_pos;
 
