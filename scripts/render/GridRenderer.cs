@@ -151,13 +151,14 @@ public sealed partial class GridRenderer : Node3D
             long tier0Sq = (long)Tier0Range * Tier0Range;
             long tier1Sq = (long)Tier1Range * Tier1Range;
             long tier3Sq = (long)Tier3Range * Tier3Range;
-            // Overlap bands: chunks within ±1 chunk of a tier boundary emit into
-            // BOTH the near and coarse bucket so the coarse patch exists and
-            // can dither in at the boundary. Fade band width here (1 chunk)
-            // must match the fade window BuildTerrainMaterial hands the
-            // shader (fade_end_m - fade_start_m = 1 chunk).
+            // Overlap bands. L1/G4 boundary: G4 extends 1 chunk INTO L1
+            // territory so it can fade in where L1 covers it (tier1InnerSq).
+            // G4/G8 boundary: G4 extends 1 chunk PAST tier3 into G8 territory
+            // (tier3OuterSq) so G4's fade-out and G8's fade-in crossfade on
+            // the G8 side of the boundary. Band widths (1 chunk) must match
+            // the fade windows BuildTerrainMaterial hands the shader.
             long tier1InnerSq = (long)(Tier1Range - 1) * (Tier1Range - 1);
-            long tier3InnerSq = (long)(Tier3Range - 1) * (Tier3Range - 1);
+            long tier3OuterSq = (long)(Tier3Range + 1) * (Tier3Range + 1);
             for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
             for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
             {
@@ -185,9 +186,9 @@ public sealed partial class GridRenderer : Node3D
                     // (use MIN dist). Using MIN for both caused straddling groups
                     // (near corner in close zone, far corner past tier1) to be
                     // skipped entirely, leaving uncovered holes between L1 and G4.
-                    if (g4MaxSq > tier1InnerSq && g4MinSq <= tier3Sq)
+                    if (g4MaxSq > tier1InnerSq && g4MinSq <= tier3OuterSq)
                         AddToBucket(g4Masks, g4Key, ck);
-                    if (g8MaxSq > tier3InnerSq)
+                    if (g8MaxSq > tier3Sq)
                         AddToBucket(g8Masks, g8Key, ck);
                 }
             }
@@ -633,17 +634,28 @@ public sealed partial class GridRenderer : Node3D
         m.SetShaderParameter("albedo_tex", _grassTex);
         m.SetShaderParameter("patch_width_m", patchWidth);
         m.SetShaderParameter("height_scale_m", System.Math.Max(1f, maxHeightMeters));
-        // Per-tier fade window (meters from the gimbal). G4 dithers in where
-        // it meets L1; G8 dithers in where it meets G4. Below fade_start_m
-        // every fragment discards (near tier covers it); above fade_end_m
-        // every fragment keeps (no near tier to cover).
+        // Per-tier fade bands (meters from the gimbal). Crossfade band
+        // between G4 and G8 sits at [tier3, tier3+chunk]: G4 extends 1 chunk
+        // past tier3 and fades out there; G8 starts at tier3 and fades in
+        // across the same band. Same hash on both → every pixel drawn once.
+        // G4's fade-in at [tier1-chunk, tier1] covers the L1/G4 boundary;
+        // L0/L1 don't fade (they use StandardMaterial3D, not this shader).
         const float chunkM = Chunk.Size * TileCoord.TileW;
         const float tier1m = Tier1Range * chunkM;
         const float tier3m = Tier3Range * chunkM;
         const float fadeMargin = chunkM;
-        var fadeEnd = groupSize == Group4 ? tier1m : tier3m;
-        m.SetShaderParameter("fade_start_m", fadeEnd - fadeMargin);
-        m.SetShaderParameter("fade_end_m", fadeEnd);
+        if (groupSize == Group4)
+        {
+            m.SetShaderParameter("fade_in_start_m", tier1m - fadeMargin);
+            m.SetShaderParameter("fade_in_end_m", tier1m);
+            m.SetShaderParameter("fade_out_start_m", tier3m);
+            m.SetShaderParameter("fade_out_end_m", tier3m + fadeMargin);
+        }
+        else
+        {
+            m.SetShaderParameter("fade_in_start_m", tier3m);
+            m.SetShaderParameter("fade_in_end_m", tier3m + fadeMargin);
+        }
         return m;
     }
 

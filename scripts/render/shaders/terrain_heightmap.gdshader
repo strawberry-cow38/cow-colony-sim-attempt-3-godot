@@ -27,11 +27,18 @@ uniform sampler2D albedo_tex : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float patch_width_m = 384.0;
 // Vertical scale: heightmap R channel (0..1) maps to [0, height_scale_m] meters.
 uniform float height_scale_m = 192.0;
-// Dither fade window: below fade_start_m every fragment is discarded; above
-// fade_end_m every fragment is kept. fade_end_m ≤ fade_start_m disables the
-// fade entirely (used where there is no coarse tier under this one).
-uniform float fade_start_m = 0.0;
-uniform float fade_end_m = 0.0;
+// Two dither bands. Fade-in: below fade_in_start_m every fragment discards
+// (a nearer tier covers it); above fade_in_end_m every fragment keeps.
+// Fade-out: mirror — above fade_out_end_m every fragment discards (a coarser
+// tier covers it); below fade_out_start_m every fragment keeps. In the
+// crossfade band between two tiers, this tier's fade-out and the coarser
+// tier's fade-in share the same FRAGCOORD hash but invert the threshold,
+// so every pixel is drawn by exactly one tier — no holes, no overdraw.
+// Setting end ≤ start on either band disables it.
+uniform float fade_in_start_m = 0.0;
+uniform float fade_in_end_m = 0.0;
+uniform float fade_out_start_m = 0.0;
+uniform float fade_out_end_m = 0.0;
 // Tint for debug / palette.
 // Darken to match the tone L0/G4 terrain lands at after StandardMaterial3D
 // shading — raw grass texels are brighter than the lit near-field look.
@@ -61,15 +68,21 @@ void vertex() {
 }
 
 void fragment() {
-	// Gimbal-based dither fade. Evaluated per fragment so every part of a
-	// straddling patch fades at its own distance — close fragments vanish
-	// (L1 covers them), far fragments stay.
-	if (fade_end_m > fade_start_m) {
-		float d = distance(
-			vec2(v_world_pos.x, v_world_pos.z),
-			vec2(gimbal_pos.x, gimbal_pos.z));
-		float t = clamp((d - fade_start_m) / (fade_end_m - fade_start_m), 0.0, 1.0);
-		if (t < hash12(FRAGCOORD.xy)) discard;
+	// Gimbal-based dither fades. Per-fragment so every part of a straddling
+	// patch fades at its own distance. Same hash is shared with the adjacent
+	// tier's fade band so the two tiers dither-complement (one discards where
+	// the other keeps) in the overlap region.
+	float d = distance(
+		vec2(v_world_pos.x, v_world_pos.z),
+		vec2(gimbal_pos.x, gimbal_pos.z));
+	float h = hash12(FRAGCOORD.xy);
+	if (fade_in_end_m > fade_in_start_m) {
+		float t = clamp((d - fade_in_start_m) / (fade_in_end_m - fade_in_start_m), 0.0, 1.0);
+		if (t < h) discard;
+	}
+	if (fade_out_end_m > fade_out_start_m) {
+		float t = clamp((d - fade_out_start_m) / (fade_out_end_m - fade_out_start_m), 0.0, 1.0);
+		if (h <= t) discard;
 	}
 
 	// View-space normal for Godot's lighting (VERTEX is view-space in fragment).
