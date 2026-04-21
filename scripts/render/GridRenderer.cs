@@ -150,6 +150,13 @@ public sealed partial class GridRenderer : Node3D
             long maxDistSq = (long)MaxChunkDistance * MaxChunkDistance;
             long tier0Sq = (long)Tier0Range * Tier0Range;
             long tier1Sq = (long)Tier1Range * Tier1Range;
+            // Extend LIVE one chunk past tier1 so L1 meshes overlap the band
+            // where G4's fade-in has already reached full opacity. Without the
+            // overlap, L1 ends sharply at tier1m and any height disagreement
+            // between L1's per-tile voxel cliffs and G4's per-cell (4×4 tile
+            // avg) cliffs punches a visible crack. With 1 chunk of L1 past
+            // tier1m, opaque L1 covers the crack until we're fully in G4.
+            long tier1OuterSq = (long)(Tier1Range + 1) * (Tier1Range + 1);
             // Overlap bands. L1/G4 boundary: G4 extends 1 chunk INTO L1
             // territory so it can fade in where L1 covers it (tier1InnerSq).
             // G4/G8 boundary: G4's fade_out covers [tier3, tier3+1 chunk], so
@@ -183,7 +190,7 @@ public sealed partial class GridRenderer : Node3D
                     long g8MinSq  = GroupMinDistSq(g8Key, Group8, camChunkX, camChunkZ);
                     long g8MaxSq  = GroupMaxDistSq(g8Key, Group8, camChunkX, camChunkZ);
 
-                    if (dSq <= tier1Sq)
+                    if (dSq <= tier1OuterSq)
                         perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
                     // Group needed if ANY chunk in it falls past the tier's fade-in
                     // edge (use MAX dist); cull if WHOLLY past the coarse tier's end

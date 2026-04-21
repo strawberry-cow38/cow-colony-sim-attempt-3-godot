@@ -17,10 +17,13 @@ uniform vec3 moon_color : source_color = vec3(0.85, 0.90, 1.0);
 uniform float night_amount = 0.0;
 uniform float sunset_amount = 0.0;
 uniform float ground_darken = 0.4;
-// Below-horizon plate color. Set brown so dither gaps in distant LOD terrain
-// read as ground instead of sky — masks the residual G4/G8 crossfade leaks
-// without having to perfectly stitch the geometry.
-uniform vec3 ground_color : source_color = vec3(0.35, 0.25, 0.18);
+// Below-horizon plate color. Tuned to the midpoint of fog-blanketed dirt so
+// the plate reads as far-distance ground rather than a hard brown swatch —
+// fog (bluish grey) already tints fragments at distance, so pure saturated
+// brown here stands out as an obvious different layer. Warm muted grey-
+// brown blends instead, masking residual LOD dither leaks without selling
+// the cheat.
+uniform vec3 ground_color : source_color = vec3(0.55, 0.50, 0.45);
 
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
