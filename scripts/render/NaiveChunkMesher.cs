@@ -26,6 +26,13 @@ public sealed class NaiveChunkMesher : IChunkMesher
         };
     }
 
+    public MeshBuildResult? BuildFullVoxelWithNeighbors(
+        ChunkSnapshot snapshot, TilePos chunkKey,
+        ChunkSnapshot? nPosX, ChunkSnapshot? nNegX,
+        ChunkSnapshot? nPosY, ChunkSnapshot? nNegY,
+        ChunkSnapshot? nPosZ, ChunkSnapshot? nNegZ)
+        => BuildFullVoxel(snapshot, chunkKey, nPosX, nNegX, nPosY, nNegY, nPosZ, nNegZ);
+
     public MeshBuildResult? BuildChunkHeightmapWithBorders(
         ChunkSnapshot snapshot, TilePos chunkKey, int step,
         ChunkSnapshot? posX, ChunkSnapshot? negX,
@@ -234,7 +241,11 @@ public sealed class NaiveChunkMesher : IChunkMesher
         return mesh;
     }
 
-    private static MeshBuildResult? BuildFullVoxel(ChunkSnapshot snapshot, TilePos chunkKey)
+    private static MeshBuildResult? BuildFullVoxel(
+        ChunkSnapshot snapshot, TilePos chunkKey,
+        ChunkSnapshot? nPosX = null, ChunkSnapshot? nNegX = null,
+        ChunkSnapshot? nPosY = null, ChunkSnapshot? nNegY = null,
+        ChunkSnapshot? nPosZ = null, ChunkSnapshot? nNegZ = null)
     {
         var verts = new List<Vector3>();
         var normals = new List<Vector3>();
@@ -246,10 +257,11 @@ public sealed class NaiveChunkMesher : IChunkMesher
         var th = TileCoord.TileH;
         var baseWx = chunkKey.X * Chunk.Size;
         var baseWz = chunkKey.Z * Chunk.Size;
+        const int S = Chunk.Size;
 
-        for (var ly = 0; ly < Chunk.Size; ly++)
-        for (var lz = 0; lz < Chunk.Size; lz++)
-        for (var lx = 0; lx < Chunk.Size; lx++)
+        for (var ly = 0; ly < S; ly++)
+        for (var lz = 0; lz < S; lz++)
+        for (var lx = 0; lx < S; lx++)
         {
             var tile = snapshot[lx, ly, lz];
             if (tile.IsEmpty) continue;
@@ -266,8 +278,37 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 var nx = lx + dx;
                 var ny = ly + dy;
                 var nz = lz + dz;
-                var neighborInside = (uint)nx < Chunk.Size && (uint)ny < Chunk.Size && (uint)nz < Chunk.Size;
-                if (neighborInside && !snapshot[nx, ny, nz].IsEmpty) continue;
+                bool neighborEmpty;
+                if ((uint)nx < S && (uint)ny < S && (uint)nz < S)
+                {
+                    neighborEmpty = snapshot[nx, ny, nz].IsEmpty;
+                }
+                else
+                {
+                    // Boundary: consult neighbor chunk's edge tile so adjacent
+                    // chunks don't both emit faces at their shared plane.
+                    ChunkSnapshot? nb = null;
+                    if (nx >= S) nb = nPosX;
+                    else if (nx < 0) nb = nNegX;
+                    else if (ny >= S) nb = nPosY;
+                    else if (ny < 0) nb = nNegY;
+                    else if (nz >= S) nb = nPosZ;
+                    else if (nz < 0) nb = nNegZ;
+                    if (nb.HasValue)
+                    {
+                        var mx = ((nx % S) + S) % S;
+                        var my = ((ny % S) + S) % S;
+                        var mz = ((nz % S) + S) % S;
+                        neighborEmpty = nb.Value[mx, my, mz].IsEmpty;
+                    }
+                    else
+                    {
+                        // No neighbor snapshot available → treat as empty
+                        // (emit face). Matches previous behavior at world edge.
+                        neighborEmpty = true;
+                    }
+                }
+                if (!neighborEmpty) continue;
 
                 var cell = n.Y > 0.5f ? topCell : sideCell;
                 EmitFace(verts, normals, colors, uvs, indices, ox, oy, oz, tw, th, n, Colors.White, cell);

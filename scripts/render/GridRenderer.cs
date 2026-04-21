@@ -220,21 +220,27 @@ public sealed partial class GridRenderer : Node3D
             var nNegX = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X - 1, chunkKey.Y, chunkKey.Z));
             var nPosZ = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X, chunkKey.Y, chunkKey.Z + 1));
             var nNegZ = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X, chunkKey.Y, chunkKey.Z - 1));
+            // L0 voxel mesher also needs +Y/-Y neighbors so tops/bottoms at the
+            // chunk-Y boundary don't double-emit faces when the column is solid
+            // across stacked chunks.
+            var nPosY = tier == 0 ? _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X, chunkKey.Y + 1, chunkKey.Z)) : null;
+            var nNegY = tier == 0 ? _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X, chunkKey.Y - 1, chunkKey.Z)) : null;
             long combinedRev = chunk.Revision;
-            if (tier >= 1)
-            {
-                combinedRev += nPosX?.Revision ?? 0;
-                combinedRev += nNegX?.Revision ?? 0;
-                combinedRev += nPosZ?.Revision ?? 0;
-                combinedRev += nNegZ?.Revision ?? 0;
-            }
+            combinedRev += nPosX?.Revision ?? 0;
+            combinedRev += nNegX?.Revision ?? 0;
+            combinedRev += nPosZ?.Revision ?? 0;
+            combinedRev += nNegZ?.Revision ?? 0;
+            combinedRev += nPosY?.Revision ?? 0;
+            combinedRev += nNegY?.Revision ?? 0;
             if (slot.CurrentLod == tier && slot.UploadedRevision == combinedRev) continue;
 
             var snap = chunk.Snapshot();
-            ChunkSnapshot? snapPosX = tier >= 1 ? nPosX?.Snapshot() : null;
-            ChunkSnapshot? snapNegX = tier >= 1 ? nNegX?.Snapshot() : null;
-            ChunkSnapshot? snapPosZ = tier >= 1 ? nPosZ?.Snapshot() : null;
-            ChunkSnapshot? snapNegZ = tier >= 1 ? nNegZ?.Snapshot() : null;
+            ChunkSnapshot? snapPosX = nPosX?.Snapshot();
+            ChunkSnapshot? snapNegX = nNegX?.Snapshot();
+            ChunkSnapshot? snapPosZ = nPosZ?.Snapshot();
+            ChunkSnapshot? snapNegZ = nNegZ?.Snapshot();
+            ChunkSnapshot? snapPosY = nPosY?.Snapshot();
+            ChunkSnapshot? snapNegY = nNegY?.Snapshot();
             slot.InFlight = true;
             slot.RequestedRevision = combinedRev;
             var key = chunkKey;
@@ -243,7 +249,8 @@ public sealed partial class GridRenderer : Node3D
             {
                 MeshBuildResult? r;
                 if (lod == 0)
-                    r = _mesher.BuildMeshData(snap, key, lod);
+                    r = _mesher.BuildFullVoxelWithNeighbors(snap, key,
+                        snapPosX, snapNegX, snapPosY, snapNegY, snapPosZ, snapNegZ);
                 else
                     r = _mesher.BuildChunkHeightmapWithBorders(snap, key, step: 1,
                         snapPosX, snapNegX, snapPosZ, snapNegZ);
