@@ -32,29 +32,56 @@ void vertex() {
 	// bottom), so we can't derive the sample coord from position alone.
 	vec2 uv_local = UV;
 	VERTEX.y += sample_height(uv_local);
+	// Stash local-space position so the fragment shader can reconstruct a
+	// world-space normal via derivatives; terrain mesh has no rotation, so
+	// local ≈ world for the purposes of picking up-vs-side.
+	v_world_pos = VERTEX;
 	UV = VERTEX.xz * (1.0 / 1.5); // 1.5m per tile → 1 unit of UV = 1 tile
 }
 
 void fragment() {
-	// Screen-space derivatives reconstruct per-pixel view-space normal without
-	// needing per-vertex normals. VERTEX is view-space in fragment() for
-	// Godot 4 spatial shaders, so we don't multiply through VIEW_MATRIX.
+	// View-space normal for Godot's lighting (VERTEX is view-space in fragment).
 	vec3 dx = dFdx(VERTEX);
 	vec3 dy = dFdy(VERTEX);
 	NORMAL = normalize(cross(dy, dx));
 
-	// Atlas is 4×4 cells (see TileAtlas.cs); naive UV tiling sweeps across
-	// grass → dirt → rock → sand every meter. Confine sampling to the grass
-	// cell at (col=0, row=0) and repeat within it per-tile. textureGrad with
-	// the unwrapped UV derivatives keeps mipmap selection sane across the
-	// fract() boundary.
+	// World-space normal to distinguish top faces (grass) from walls (dirt).
+	vec3 wdx = dFdx(v_world_pos);
+	vec3 wdy = dFdy(v_world_pos);
+	vec3 world_n = normalize(cross(wdy, wdx));
+
+	// Atlas: grass cell at (col=0,row=0), dirt cell 10 at (col=2,row=2).
+	// See TileAtlas.cs. Each cell is 0.25×0.25 of the atlas; inset trims
+	// the mipmap bleed from neighbouring cells.
 	const float inset = 8.0 / 2048.0;
 	const float cell_span = 0.25 - 2.0 * inset;
-	vec2 tile_uv = fract(UV);
-	vec2 atlas_uv = vec2(inset) + tile_uv * cell_span;
-	vec2 du = dFdx(UV) * cell_span;
-	vec2 dv = dFdy(UV) * cell_span;
-	vec4 tex = textureGrad(albedo_tex, atlas_uv, du, dv);
+	const vec2 grass_origin = vec2(inset);
+	const vec2 dirt_origin = vec2(0.5 + inset, 0.5 + inset);
+
+	// Top sample: tile the grass cell across xz in 1.5m units.
+	vec2 grass_uv = grass_origin + fract(UV) * cell_span;
+	vec2 grass_du = dFdx(UV) * cell_span;
+	vec2 grass_dv = dFdy(UV) * cell_span;
+	vec4 grass = textureGrad(albedo_tex, grass_uv, grass_du, grass_dv);
+
+	// Side sample: project onto whichever horizontal axis runs along the wall.
+	// Compute both projections unconditionally so derivatives stay clean at
+	// face boundaries where fragment groups might straddle both.
+	vec2 wall_x_scaled = vec2(v_world_pos.x, v_world_pos.y) * (1.0 / 1.5);
+	vec2 wall_z_scaled = vec2(v_world_pos.z, v_world_pos.y) * (1.0 / 1.5);
+	vec2 dirt_uv_x = dirt_origin + fract(wall_x_scaled) * cell_span;
+	vec2 dirt_uv_z = dirt_origin + fract(wall_z_scaled) * cell_span;
+	vec4 dirt_x = textureGrad(albedo_tex, dirt_uv_x,
+		dFdx(wall_x_scaled) * cell_span, dFdy(wall_x_scaled) * cell_span);
+	vec4 dirt_z = textureGrad(albedo_tex, dirt_uv_z,
+		dFdx(wall_z_scaled) * cell_span, dFdy(wall_z_scaled) * cell_span);
+	// Wall normal along ±X → run UV along z; along ±Z → run UV along x.
+	float pick_z = step(abs(world_n.z), abs(world_n.x));
+	vec4 dirt = mix(dirt_x, dirt_z, pick_z);
+
+	float top_factor = smoothstep(0.5, 0.9, world_n.y);
+	vec4 tex = mix(dirt, grass, top_factor);
+
 	ALBEDO = tex.rgb * tint.rgb;
 	ROUGHNESS = 0.95;
 }
