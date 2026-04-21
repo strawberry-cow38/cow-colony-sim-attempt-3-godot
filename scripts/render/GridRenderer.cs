@@ -79,7 +79,7 @@ public sealed partial class GridRenderer : Node3D
             _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width);
             _g4PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G4CellsPerSide, g4Width);
 
-            if (!RenderingServer.GlobalShaderParameterGetList().Any(n => n.AsString() == "gimbal_pos"))
+            if (!RenderingServer.GlobalShaderParameterGetList().Any(n => n.ToString() == "gimbal_pos"))
             {
                 RenderingServer.GlobalShaderParameterAdd(
                     "gimbal_pos",
