@@ -164,6 +164,29 @@ public sealed class TileWorld
         MutationTick++;
     }
 
+    /// <summary>
+    /// Flag the east edge of tile (x, z) as a cliff. Tile (x, z) is the upper
+    /// platform; tile (x+1, z) renders its west edge corners at
+    /// <paramref name="lowerHeight"/> instead of the shared heightmap value.
+    /// </summary>
+    public void SetTerrainCliffE(int x, int z, short lowerHeight)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetCliffE(lx, lz, lowerHeight);
+        MutationTick++;
+    }
+
+    /// <summary>
+    /// Flag the south edge of tile (x, z) as a cliff. Upper platform is
+    /// (x, z); tile (x, z+1) is the lower floor.
+    /// </summary>
+    public void SetTerrainCliffS(int x, int z, short lowerHeight)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetCliffS(lx, lz, lowerHeight);
+        MutationTick++;
+    }
+
     public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 
@@ -183,10 +206,18 @@ public sealed class TileWorld
         {
             snap.Heights[lx, lz] = tc.Heights[lx, lz];
             snap.Kinds[lx, lz]   = tc.Kinds[lx, lz];
+            // Copy own E/S cliff bits; W/N bits + lower heights are derived
+            // below from -X / -Z neighbors.
+            var ownMask = (byte)(tc.CliffMask[lx, lz] & (TerrainChunk.CliffBitE | TerrainChunk.CliffBitS));
+            snap.CliffMask[lx, lz] = ownMask;
+            snap.CliffLowerE[lx, lz] = tc.CliffLowerE[lx, lz];
+            snap.CliffLowerS[lx, lz] = tc.CliffLowerS[lx, lz];
         }
         _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
         _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);
         _terrainChunks.TryGetValue((cx + 1, cz + 1), out var pxz);
+        _terrainChunks.TryGetValue((cx - 1, cz),     out var nx);
+        _terrainChunks.TryGetValue((cx,     cz - 1), out var nz);
         for (var lz = 0; lz < s; lz++)
             snap.Heights[s, lz] = px?.Heights[0, lz] ?? tc.Heights[s - 1, lz];
         for (var lx = 0; lx < s; lx++)
@@ -196,6 +227,49 @@ public sealed class TileWorld
             px?.Heights[0, s - 1] ??
             pz?.Heights[s - 1, 0] ??
             tc.Heights[s - 1, s - 1];
+
+        // Derive W / N bits from -X / -Z neighbors. Tile (lx, lz)'s W cliff
+        // exists when the owning tile to the west (either in this chunk at
+        // lx-1 or in the -X neighbor at s-1) has its E bit set. Mirror its
+        // stored E lower-height into our W slot so the mesher reads a
+        // self-contained snapshot.
+        for (var lz = 0; lz < s; lz++)
+        for (var lx = 0; lx < s; lx++)
+        {
+            byte westMask; short westLower;
+            if (lx == 0)
+            {
+                westMask = nx != null ? (byte)(nx.CliffMask[s - 1, lz] & TerrainChunk.CliffBitE) : (byte)0;
+                westLower = nx?.CliffLowerE[s - 1, lz] ?? (short)0;
+            }
+            else
+            {
+                westMask = (byte)(tc.CliffMask[lx - 1, lz] & TerrainChunk.CliffBitE);
+                westLower = tc.CliffLowerE[lx - 1, lz];
+            }
+            if (westMask != 0)
+            {
+                snap.CliffMask[lx, lz] |= TerrainSnapshot.CliffBitW;
+                snap.CliffLowerW[lx, lz] = westLower;
+            }
+
+            byte northMask; short northLower;
+            if (lz == 0)
+            {
+                northMask = nz != null ? (byte)(nz.CliffMask[lx, s - 1] & TerrainChunk.CliffBitS) : (byte)0;
+                northLower = nz?.CliffLowerS[lx, s - 1] ?? (short)0;
+            }
+            else
+            {
+                northMask = (byte)(tc.CliffMask[lx, lz - 1] & TerrainChunk.CliffBitS);
+                northLower = tc.CliffLowerS[lx, lz - 1];
+            }
+            if (northMask != 0)
+            {
+                snap.CliffMask[lx, lz] |= TerrainSnapshot.CliffBitN;
+                snap.CliffLowerN[lx, lz] = northLower;
+            }
+        }
         return snap;
     }
 

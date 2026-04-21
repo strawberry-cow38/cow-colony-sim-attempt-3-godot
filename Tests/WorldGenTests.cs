@@ -213,6 +213,141 @@ public class WorldGenTests
     }
 
     [Fact]
+    public void SetTerrainCliffE_Round_Trips_Into_Snapshot()
+    {
+        var world = new TileWorld();
+        world.SetTerrainHeight(5, 5, 10);
+        world.SetTerrainCliffE(5, 5, lowerHeight: 3);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        Assert.Equal(TerrainSnapshot.CliffBitE,
+            snap!.CliffMask[5, 5] & TerrainSnapshot.CliffBitE);
+        Assert.Equal(3, snap.CliffLowerE[5, 5]);
+    }
+
+    [Fact]
+    public void SetTerrainCliffS_Round_Trips_Into_Snapshot()
+    {
+        var world = new TileWorld();
+        world.SetTerrainHeight(2, 3, 8);
+        world.SetTerrainCliffS(2, 3, lowerHeight: 1);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        Assert.Equal(TerrainSnapshot.CliffBitS,
+            snap!.CliffMask[2, 3] & TerrainSnapshot.CliffBitS);
+        Assert.Equal(1, snap.CliffLowerS[2, 3]);
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Derives_W_Bit_From_Same_Chunk_Neighbor()
+    {
+        var world = new TileWorld();
+        // Tile (4, 7) owns its E edge; that edge is tile (5, 7)'s W edge.
+        world.SetTerrainHeight(4, 7, 12);
+        world.SetTerrainCliffE(4, 7, lowerHeight: 4);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        // Upper tile carries E; lower tile carries W + mirrored lower height.
+        Assert.Equal(TerrainSnapshot.CliffBitE,
+            snap!.CliffMask[4, 7] & TerrainSnapshot.CliffBitE);
+        Assert.Equal(TerrainSnapshot.CliffBitW,
+            snap.CliffMask[5, 7] & TerrainSnapshot.CliffBitW);
+        Assert.Equal(4, snap.CliffLowerW[5, 7]);
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Derives_N_Bit_From_Same_Chunk_Neighbor()
+    {
+        var world = new TileWorld();
+        world.SetTerrainHeight(6, 2, 15);
+        world.SetTerrainCliffS(6, 2, lowerHeight: 6);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        Assert.Equal(TerrainSnapshot.CliffBitN,
+            snap!.CliffMask[6, 3] & TerrainSnapshot.CliffBitN);
+        Assert.Equal(6, snap.CliffLowerN[6, 3]);
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Derives_W_Bit_Across_Chunk_Seam()
+    {
+        var world = new TileWorld();
+        const int s = TerrainChunk.Size;
+        // -X neighbor chunk (-1, 0) owns world column x=-1. Its E edge is our
+        // (lx=0) tile's W edge.
+        world.SetTerrainHeight(-1, 4, 20);
+        world.SetTerrainCliffE(-1, 4, lowerHeight: 7);
+        // Materialize our chunk so it can be snapshotted.
+        world.SetTerrainHeight(0, 4, 20);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        Assert.Equal(TerrainSnapshot.CliffBitW,
+            snap!.CliffMask[0, 4] & TerrainSnapshot.CliffBitW);
+        Assert.Equal(7, snap.CliffLowerW[0, 4]);
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Derives_N_Bit_Across_Chunk_Seam()
+    {
+        var world = new TileWorld();
+        world.SetTerrainHeight(3, -1, 25);
+        world.SetTerrainCliffS(3, -1, lowerHeight: 9);
+        world.SetTerrainHeight(3, 0, 25);
+
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        Assert.Equal(TerrainSnapshot.CliffBitN,
+            snap!.CliffMask[3, 0] & TerrainSnapshot.CliffBitN);
+        Assert.Equal(9, snap.CliffLowerN[3, 0]);
+    }
+
+    [Fact]
+    public void SnapshotTerrain_Has_No_WN_Bits_At_World_Edge()
+    {
+        var world = new TileWorld();
+        // Materialize chunk (0,0) but leave no -X / -Z neighbors.
+        world.SetTerrainHeight(0, 0, 1);
+        var snap = world.SnapshotTerrain(0, 0);
+        Assert.NotNull(snap);
+        for (var lz = 0; lz < TerrainChunk.Size; lz++)
+        {
+            Assert.Equal(0,
+                snap!.CliffMask[0, lz] & TerrainSnapshot.CliffBitW);
+        }
+        for (var lx = 0; lx < TerrainChunk.Size; lx++)
+        {
+            Assert.Equal(0,
+                snap!.CliffMask[lx, 0] & TerrainSnapshot.CliffBitN);
+        }
+    }
+
+    [Fact]
+    public void TerrainChunk_ClearCliff_Clears_Bit_And_Lower()
+    {
+        var tc = new TerrainChunk();
+        tc.SetCliffE(3, 4, lowerHeight: 2);
+        Assert.NotEqual(0, tc.CliffMask[3, 4] & TerrainChunk.CliffBitE);
+        tc.ClearCliffE(3, 4);
+        Assert.Equal(0, tc.CliffMask[3, 4] & TerrainChunk.CliffBitE);
+        Assert.Equal(0, tc.CliffLowerE[3, 4]);
+    }
+
+    [Fact]
+    public void TerrainChunk_SetCliff_Skips_Revision_On_Redundant_Write()
+    {
+        var tc = new TerrainChunk();
+        tc.SetCliffE(0, 0, lowerHeight: 5);
+        var rev = tc.Revision;
+        tc.SetCliffE(0, 0, lowerHeight: 5);
+        Assert.Equal(rev, tc.Revision);
+    }
+
+    [Fact]
     public void TerrainSlope_Reports_Max_Corner_Delta()
     {
         var world = new TileWorld();
