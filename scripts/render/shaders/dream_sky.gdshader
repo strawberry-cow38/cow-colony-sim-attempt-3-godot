@@ -58,12 +58,15 @@ void sky() {
     vec3 zenith = mix(zenith_ds, zenith_night, night_amount);
     vec3 horizon = mix(horizon_ds, horizon_night, night_amount);
 
-    vec3 sky_col;
-    if (up >= 0.0) {
-        sky_col = mix(horizon, zenith, pow(up01, 0.55));
-    } else {
-        sky_col = ground_color;
-    }
+    // Ground plate bleeds slightly above the true horizon (up=0) so that
+    // narrow sky strips between distant terrain tiers and the plate are
+    // covered by the plate color instead of showing pale horizon blue.
+    // Fog already tints that band a greyed-out color, so pushing the plate
+    // up 2–3 degrees makes tier-disagreement voids read as fogged ground
+    // rather than a visible sky slit.
+    float ground_blend = 1.0 - smoothstep(0.0, 0.05, up);
+    vec3 sky_above = mix(horizon, zenith, pow(up01, 0.55));
+    vec3 sky_col = mix(sky_above, ground_color, ground_blend);
 
     float sun_d = max(dot(dir, normalize(sun_dir)), 0.0);
     vec3 sun = pow(sun_d, sun_sharpness) * sun_color * sun_energy * (1.0 - night_amount);
