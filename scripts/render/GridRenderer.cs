@@ -14,10 +14,12 @@ public sealed partial class GridRenderer : Node3D
     private const int Tier0Range = 2;    // L0: per-chunk voxel
     private const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
     private const int Tier3Range = 16;   // L3: G4 group (4x4 chunks) heightmap step=4
-    // else L4: G8 group (8x8 chunks) heightmap step=32, skip cliffs under 3 tiles
+    private const int Tier4Range = 64;   // L4: G8 group (8x8 chunks) heightmap step=32
+    // else L5: G16 group (16x16 chunks) heightmap step=64, skip cliffs under 6 tiles
 
     private const int Group4 = 4;
     private const int Group8 = 8;
+    private const int Group16 = 16;
 
     // Radial draw-distance cap (chebyshev chunks).
     public static int MaxChunkDistance { get; set; } = 128;
@@ -25,6 +27,7 @@ public sealed partial class GridRenderer : Node3D
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g4Slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g8Slots = new();
+    private readonly Dictionary<TilePos, GroupRenderSlot> _g16Slots = new();
 
     private readonly ConcurrentQueue<(TilePos Key, MeshBuildResult? Result, int Lod)> _completedChunk = new();
     private readonly ConcurrentQueue<(TilePos Key, int GroupSize, MeshBuildResult? Result, int Lod, long MaskHash)> _completedGroup = new();
@@ -63,6 +66,7 @@ public sealed partial class GridRenderer : Node3D
 
         var g4Masks = new Dictionary<TilePos, List<TilePos>>();
         var g8Masks = new Dictionary<TilePos, List<TilePos>>();
+        var g16Masks = new Dictionary<TilePos, List<TilePos>>();
         var perChunkTier = new Dictionary<TilePos, int>();
 
         foreach (var kv in _simHost.Tiles.EnumerateChunks())
@@ -80,9 +84,13 @@ public sealed partial class GridRenderer : Node3D
             {
                 AddToBucket(g4Masks, GroupKey(ck, Group4), ck);
             }
-            else
+            else if (d <= Tier4Range)
             {
                 AddToBucket(g8Masks, GroupKey(ck, Group8), ck);
+            }
+            else
+            {
+                AddToBucket(g16Masks, GroupKey(ck, Group16), ck);
             }
         }
         Profiler.End("Classify");
@@ -92,13 +100,15 @@ public sealed partial class GridRenderer : Node3D
         Profiler.End("PerChunk");
 
         Profiler.Begin("Groups");
-        UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4,  cliffMinDelta: 1);
-        UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 32, cliffMinDelta: 3);
+        UpdateGroupSlots(_g4Slots,  g4Masks,  Group4,  lod: 3, step: 4,  cliffMinDelta: 1);
+        UpdateGroupSlots(_g8Slots,  g8Masks,  Group8,  lod: 4, step: 32, cliffMinDelta: 3);
+        UpdateGroupSlots(_g16Slots, g16Masks, Group16, lod: 5, step: 64, cliffMinDelta: 6);
         Profiler.End("Groups");
 
         Profiler.SetCounter("L0+L1 slots", _slots.Count);
         Profiler.SetCounter("G4 slots", _g4Slots.Count);
         Profiler.SetCounter("G8 slots", _g8Slots.Count);
+        Profiler.SetCounter("G16 slots", _g16Slots.Count);
         Profiler.SetCounter("InFlight", CountInFlight());
     }
 
@@ -108,6 +118,7 @@ public sealed partial class GridRenderer : Node3D
         foreach (var kv in _slots) if (kv.Value.InFlight) n++;
         foreach (var kv in _g4Slots) if (kv.Value.InFlight) n++;
         foreach (var kv in _g8Slots) if (kv.Value.InFlight) n++;
+        foreach (var kv in _g16Slots) if (kv.Value.InFlight) n++;
         return n;
     }
 
@@ -125,7 +136,7 @@ public sealed partial class GridRenderer : Node3D
         while (_completedGroup.TryDequeue(out var pack))
         {
             var (key, groupSize, result, lod, maskHash) = pack;
-            var table = groupSize == Group4 ? _g4Slots : _g8Slots;
+            var table = groupSize == Group4 ? _g4Slots : groupSize == Group8 ? _g8Slots : _g16Slots;
             if (!table.TryGetValue(key, out var slot)) continue;
             slot.InFlight = false;
             slot.MeshInstance.Mesh = result != null ? AssembleArrayMesh(result) : null;
