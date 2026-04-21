@@ -305,6 +305,7 @@ public sealed partial class GridRenderer : Node3D
     private void UpdatePerChunkSlots(Dictionary<TilePos, int> perChunkTier)
     {
         var active = new HashSet<TilePos>();
+        var mutationTick = _simHost!.Tiles.MutationTick;
         foreach (var (chunkKey, tier) in perChunkTier)
         {
             active.Add(chunkKey);
@@ -318,6 +319,7 @@ public sealed partial class GridRenderer : Node3D
             }
             slot.MeshInstance.Visible = true;
             if (slot.InFlight) continue;
+            if (slot.LastCheckedMutationTick == mutationTick && slot.CurrentLod == tier) continue;
             if (_frameDispatchChunk >= DispatchChunkBudget) continue;
 
             var nPosX = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X + 1, chunkKey.Y, chunkKey.Z));
@@ -336,7 +338,11 @@ public sealed partial class GridRenderer : Node3D
             combinedRev += nNegZ?.Revision ?? 0;
             combinedRev += nPosY?.Revision ?? 0;
             combinedRev += nNegY?.Revision ?? 0;
-            if (slot.CurrentLod == tier && slot.UploadedRevision == combinedRev) continue;
+            if (slot.CurrentLod == tier && slot.UploadedRevision == combinedRev)
+            {
+                slot.LastCheckedMutationTick = mutationTick;
+                continue;
+            }
 
             var snap = chunk.Snapshot();
             ChunkSnapshot? snapPosX = nPosX?.Snapshot();
@@ -347,6 +353,7 @@ public sealed partial class GridRenderer : Node3D
             ChunkSnapshot? snapNegY = nNegY?.Snapshot();
             slot.InFlight = true;
             slot.RequestedRevision = combinedRev;
+            slot.LastCheckedMutationTick = mutationTick;
             _frameDispatchChunk++;
             var key = chunkKey;
             var lod = tier;
@@ -376,6 +383,7 @@ public sealed partial class GridRenderer : Node3D
         Dictionary<TilePos, List<TilePos>> masks,
         int groupSize, int lod, int step, int cliffMinDelta)
     {
+        var mutationTick = _simHost!.Tiles.MutationTick;
         foreach (var (groupKey, chunkKeys) in masks)
         {
             if (!table.TryGetValue(groupKey, out var slot))
@@ -386,6 +394,7 @@ public sealed partial class GridRenderer : Node3D
             }
             slot.MeshInstance.Visible = true;
             if (slot.InFlight) continue;
+            if (slot.LastCheckedMutationTick == mutationTick && slot.CurrentLod == lod) continue;
 
             long maskHash = 0;
             long revHash = 0;
@@ -401,7 +410,11 @@ public sealed partial class GridRenderer : Node3D
                     revHash += chunk.Revision;
                 }
             }
-            if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
+            if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash)
+            {
+                slot.LastCheckedMutationTick = mutationTick;
+                continue;
+            }
             ref var dispatchCount = ref (groupSize == Group4 ? ref _frameDispatchG4 : ref _frameDispatchG8);
             if (dispatchCount >= DispatchGroupBudget) continue;
 
@@ -417,6 +430,7 @@ public sealed partial class GridRenderer : Node3D
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
+            slot.LastCheckedMutationTick = mutationTick;
             dispatchCount++;
             var key = groupKey;
             var size = groupSize;
@@ -445,6 +459,7 @@ public sealed partial class GridRenderer : Node3D
         int groupSize, int lod)
     {
         var patchMesh = groupSize == Group4 ? _g4PatchMesh! : _g8PatchMesh!;
+        var mutationTick = _simHost!.Tiles.MutationTick;
         foreach (var (groupKey, chunkKeys) in masks)
         {
             if (!table.TryGetValue(groupKey, out var slot))
@@ -459,6 +474,7 @@ public sealed partial class GridRenderer : Node3D
             }
             slot.MeshInstance.Visible = true;
             if (slot.InFlight) continue;
+            if (slot.LastCheckedMutationTick == mutationTick && slot.CurrentLod == lod) continue;
 
             long maskHash = 0;
             long revHash = 0;
@@ -480,7 +496,11 @@ public sealed partial class GridRenderer : Node3D
             // seams don't gap. Include them in maskHash/revHash so a neighbor
             // edit retriggers this group's rebuild.
             AccumulateBorderHash(yLevels, groupKey, groupSize, ref maskHash, ref revHash);
-            if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
+            if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash)
+            {
+                slot.LastCheckedMutationTick = mutationTick;
+                continue;
+            }
             ref var dispatchCount = ref (groupSize == Group4 ? ref _frameDispatchG4 : ref _frameDispatchG8);
             if (dispatchCount >= DispatchGroupBudget) continue;
 
@@ -497,6 +517,7 @@ public sealed partial class GridRenderer : Node3D
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
+            slot.LastCheckedMutationTick = mutationTick;
             dispatchCount++;
             var key = groupKey;
             var size = groupSize;
@@ -683,6 +704,10 @@ public sealed partial class GridRenderer : Node3D
         public long RequestedRevision = -1;
         public int CurrentLod = -1;
         public bool InFlight;
+        // TileWorld.MutationTick observed when this slot was last reconciled.
+        // Matches current tick + correct lod → skip the neighbor revision walk
+        // entirely. Steady-state frames do zero per-chunk work.
+        public long LastCheckedMutationTick = -1;
     }
 
     private sealed class GroupRenderSlot
@@ -693,5 +718,6 @@ public sealed partial class GridRenderer : Node3D
         public long UploadedMaskHash;
         public int CurrentLod = -1;
         public bool InFlight;
+        public long LastCheckedMutationTick = -1;
     }
 }

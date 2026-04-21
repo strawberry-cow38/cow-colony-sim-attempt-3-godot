@@ -9,6 +9,12 @@ public sealed class TileWorld
 
     public int ChunkCount => _chunks.Count;
 
+    // Monotonic counter bumped whenever a tile mutates, a chunk is paged in, or
+    // a chunk is evicted. Consumers (notably the renderer) snapshot this and
+    // can skip per-chunk walks when the value is unchanged since last frame —
+    // steady-state has no per-chunk work at all.
+    public long MutationTick { get; private set; }
+
     public IEnumerable<KeyValuePair<TilePos, Chunk>> EnumerateChunks() => _chunks;
 
     /// <summary>Chunk keys whose XZ column falls inside the cell. Null if none.</summary>
@@ -57,6 +63,7 @@ public sealed class TileWorld
             }
         }
         _chunksByCell.Remove(key);
+        if (evicted.Count > 0) MutationTick++;
         return evicted;
     }
 
@@ -76,6 +83,7 @@ public sealed class TileWorld
             list.Add(ck);
         }
         _chunksByCell[key] = list;
+        MutationTick++;
     }
 
     public bool CellHasChunks(CellKey key) => _chunksByCell.ContainsKey(key);
@@ -103,8 +111,11 @@ public sealed class TileWorld
                 _chunksByCell[cellKey] = list;
             }
             list.Add(chunkKey);
+            MutationTick++;
         }
+        var prevRev = chunk.Revision;
         chunk[lx, ly, lz] = tile;
+        if (chunk.Revision != prevRev) MutationTick++;
     }
 
     public IEnumerable<(TilePos Pos, Tile Tile)> Neighbors(TilePos pos)
