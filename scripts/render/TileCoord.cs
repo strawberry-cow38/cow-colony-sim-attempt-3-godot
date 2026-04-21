@@ -20,4 +20,10 @@ public static class TileCoord
         chunkKey.Y * Chunk.Size * TileH,
         chunkKey.Z * Chunk.Size * TileW
     );
+
+    public static TilePos WorldToTile(Vector3 world) => new(
+        (int)Mathf.Floor(world.X / TileW),
+        (int)Mathf.Floor(world.Y / TileH),
+        (int)Mathf.Floor(world.Z / TileW)
+    );
 }
