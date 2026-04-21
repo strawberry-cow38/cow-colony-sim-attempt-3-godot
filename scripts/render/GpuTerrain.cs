@@ -35,12 +35,18 @@ public static class GpuTerrain
         var vi = 0;
         var ii = 0;
         var invN = 1.0f / cellsPerSide;
+        // Center verts around the MeshInstance origin so Godot's
+        // VisibilityRangeBegin (measured cam→origin, not cam→AABB) corresponds
+        // to the patch midpoint rather than a corner. Straddling groups would
+        // otherwise fade out whenever the near corner dipped below Begin,
+        // hiding far-side chunks with no near-tier coverage and leaving holes.
+        var half = patchWidthMeters * 0.5f;
         for (var cz = 0; cz < cellsPerSide; cz++)
         for (var cx = 0; cx < cellsPerSide; cx++)
         {
-            var x0 = cx * cell;
+            var x0 = cx * cell - half;
             var x1 = x0 + cell;
-            var z0 = cz * cell;
+            var z0 = cz * cell - half;
             var z1 = z0 + cell;
             var ownUv = new Vector2((cx + 0.5f) * invN, (cz + 0.5f) * invN);
 
@@ -112,7 +118,7 @@ public static class GpuTerrain
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         mesh.CustomAabb = new Aabb(
-            new Vector3(-1f, -2f, -1f),
+            new Vector3(-half - 1f, -2f, -half - 1f),
             new Vector3(patchWidthMeters + 2f, 260f, patchWidthMeters + 2f));
         return mesh;
     }
@@ -123,11 +129,12 @@ public static class GpuTerrain
         var vertexArr = new Vector3[verts.Length];
         var uvArr = new Vector2[verts.Length];
         var cell = patchWidthMeters / cellsPerSide;
+        var half = patchWidthMeters * 0.5f;
         for (var z = 0; z <= cellsPerSide; z++)
         for (var x = 0; x <= cellsPerSide; x++)
         {
             var idx = z * (cellsPerSide + 1) + x;
-            vertexArr[idx] = new Vector3(x * cell, 0f, z * cell);
+            vertexArr[idx] = new Vector3(x * cell - half, 0f, z * cell - half);
             uvArr[idx] = new Vector2((float)x / cellsPerSide, (float)z / cellsPerSide);
         }
 
@@ -155,7 +162,7 @@ public static class GpuTerrain
         // patch whenever the camera's frustum doesn't clip Y=0. Inflate so the
         // GPU-displaced geometry stays visible.
         mesh.CustomAabb = new Aabb(
-            new Vector3(-1f, -2f, -1f),
+            new Vector3(-half - 1f, -2f, -half - 1f),
             new Vector3(patchWidthMeters + 2f, 260f, patchWidthMeters + 2f));
         return mesh;
     }

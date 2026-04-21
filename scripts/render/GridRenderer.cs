@@ -596,9 +596,16 @@ public sealed partial class GridRenderer : Node3D
 
     private MeshInstance3D BuildGpuInstance(TilePos originChunkKey, ArrayMesh patchMesh, int lod)
     {
+        // Patch verts are centered on their MeshInstance origin (see
+        // BuildPatchMeshStepped). Shift Position by half-patch so the mesh
+        // still occupies [ChunkOrigin, ChunkOrigin + patchW] in world space
+        // while GlobalPosition reports the patch midpoint — which is what
+        // Godot uses for VisibilityRange distance checks.
+        var groupSize = lod == 3 ? Group4 : Group8;
+        var half = groupSize * Chunk.Size * TileCoord.TileW * 0.5f;
         var mi = new MeshInstance3D
         {
-            Position = TileCoord.ChunkOrigin(originChunkKey),
+            Position = TileCoord.ChunkOrigin(originChunkKey) + new Vector3(half, 0f, half),
             Mesh = patchMesh,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
@@ -616,26 +623,27 @@ public sealed partial class GridRenderer : Node3D
         const float tier1m = Tier1Range * chunkM;
         const float tier3m = Tier3Range * chunkM;
         const float fadeMargin = chunkM;
+        // Fade only on the coarse side of each tier boundary: G4 dithers in
+        // where G4 meets L1, G8 dithers in where G8 meets G4. Real (L0/L1)
+        // chunks never fade — their draw range is driven purely by Classify
+        // dropping them from perChunkTier past tier1. G4's far edge hard-
+        // cuts at tier3 while G8 fades in to cover.
         mi.VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self;
         switch (lod)
         {
             case 0:
             case 1:
-                mi.VisibilityRangeEnd = tier1m;
-                mi.VisibilityRangeEndMargin = fadeMargin;
+                // No fade.
                 break;
             case 3:
-                // No VisibilityRangeBegin: Godot measures the range from camera
-                // to the mesh instance ORIGIN (group corner), not the AABB, so
-                // applying Begin hides the whole patch whenever the near corner
-                // is close — even when the far corner is deep past tier1 with
-                // no near-tier mesh to cover. L1 overdraws G4 in the close zone.
+                mi.VisibilityRangeBegin = tier1m - fadeMargin;
+                mi.VisibilityRangeBeginMargin = fadeMargin;
                 mi.VisibilityRangeEnd = tier3m;
-                mi.VisibilityRangeEndMargin = fadeMargin;
+                // EndMargin=0 → hard cutoff. G8 fading in here covers the pop.
                 break;
             case 4:
-                // Same origin-vs-AABB issue as case 3; G8 stays visible up to
-                // MaxChunkDistance and G4 overdraws it in the close zone.
+                mi.VisibilityRangeBegin = tier3m - fadeMargin;
+                mi.VisibilityRangeBeginMargin = fadeMargin;
                 break;
         }
     }
