@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Godot;
 using CowColonySim.Sim.Grid;
@@ -77,6 +78,14 @@ public sealed partial class GridRenderer : Node3D
             // G8 and G4 are stepped — matches blocky look of L0/L1 at tier boundaries.
             _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width);
             _g4PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G4CellsPerSide, g4Width);
+
+            if (!RenderingServer.GlobalShaderParameterGetList().Any(n => n.AsString() == "gimbal_pos"))
+            {
+                RenderingServer.GlobalShaderParameterAdd(
+                    "gimbal_pos",
+                    RenderingServer.GlobalShaderParameterType.Vec3,
+                    Vector3.Zero);
+            }
         }
     }
 
@@ -98,6 +107,12 @@ public sealed partial class GridRenderer : Node3D
         // don't thrash the LOD classifier. Only pan (Target move) crosses a
         // chunk boundary and retriggers rebuilds.
         var focus = cam is OrbitCamera orbit ? orbit.Target : cam?.GlobalPosition ?? Vector3.Zero;
+        // Feeds the terrain shader's per-fragment fade so coarse tiers dither
+        // against the gimbal, not the camera — zoom/pitch no longer shift the
+        // boundary, and the fade reads each fragment's real world position
+        // instead of the mesh origin.
+        if (GpuTerrainEnabled)
+            RenderingServer.GlobalShaderParameterSet("gimbal_pos", focus);
         var camChunkX = Mathf.FloorToInt(focus.X / (Chunk.Size * TileCoord.TileW));
         var camChunkZ = Mathf.FloorToInt(focus.Z / (Chunk.Size * TileCoord.TileW));
 
@@ -137,11 +152,10 @@ public sealed partial class GridRenderer : Node3D
             long tier1Sq = (long)Tier1Range * Tier1Range;
             long tier3Sq = (long)Tier3Range * Tier3Range;
             // Overlap bands: chunks within ±1 chunk of a tier boundary emit into
-            // BOTH the near and coarse bucket so L1/G4 and G4/G8 meshes render
-            // simultaneously. VisibilityRangeFadeMode.Self dithers between them
-            // — without the overlap there's nothing behind the fade-out, so the
-            // terrain pops. Fade band width here (1 chunk) must match the
-            // fadeMargin in ApplyLodFade.
+            // BOTH the near and coarse bucket so the coarse patch exists and
+            // can dither in at the boundary. Fade band width here (1 chunk)
+            // must match the fade window BuildTerrainMaterial hands the
+            // shader (fade_end_m - fade_start_m = 1 chunk).
             long tier1InnerSq = (long)(Tier1Range - 1) * (Tier1Range - 1);
             long tier3InnerSq = (long)(Tier3Range - 1) * (Tier3Range - 1);
             for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
@@ -599,53 +613,16 @@ public sealed partial class GridRenderer : Node3D
         // Patch verts are centered on their MeshInstance origin (see
         // BuildPatchMeshStepped). Shift Position by half-patch so the mesh
         // still occupies [ChunkOrigin, ChunkOrigin + patchW] in world space
-        // while GlobalPosition reports the patch midpoint — which is what
-        // Godot uses for VisibilityRange distance checks.
+        // while GlobalPosition reports the patch midpoint — lines the
+        // MODEL_MATRIX up with the shader's per-fragment fade calc.
         var groupSize = lod == 3 ? Group4 : Group8;
         var half = groupSize * Chunk.Size * TileCoord.TileW * 0.5f;
-        var mi = new MeshInstance3D
+        return new MeshInstance3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey) + new Vector3(half, 0f, half),
             Mesh = patchMesh,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
-        ApplyLodFade(mi, lod);
-        return mi;
-    }
-
-    // Tier boundaries in meters (1 chunk = 24m): L1 ends at Tier1Range (6×24=144m),
-    // G4 ends at Tier3Range (16×24=384m). Each boundary gets a 1-chunk dither
-    // window so adjacent tiers overlap on screen — fade out on the near mesh
-    // is matched by fade in on the coarse mesh.
-    private static void ApplyLodFade(MeshInstance3D mi, int lod)
-    {
-        const float chunkM = Chunk.Size * TileCoord.TileW;
-        const float tier1m = Tier1Range * chunkM;
-        const float tier3m = Tier3Range * chunkM;
-        const float fadeMargin = chunkM;
-        // Fade only on the coarse side of each tier boundary: G4 dithers in
-        // where G4 meets L1, G8 dithers in where G8 meets G4. Real (L0/L1)
-        // chunks never fade — their draw range is driven purely by Classify
-        // dropping them from perChunkTier past tier1. G4's far edge hard-
-        // cuts at tier3 while G8 fades in to cover.
-        mi.VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self;
-        switch (lod)
-        {
-            case 0:
-            case 1:
-                // No fade.
-                break;
-            case 3:
-                mi.VisibilityRangeBegin = tier1m - fadeMargin;
-                mi.VisibilityRangeBeginMargin = fadeMargin;
-                mi.VisibilityRangeEnd = tier3m;
-                // EndMargin=0 → hard cutoff. G8 fading in here covers the pop.
-                break;
-            case 4:
-                mi.VisibilityRangeBegin = tier3m - fadeMargin;
-                mi.VisibilityRangeBeginMargin = fadeMargin;
-                break;
-        }
     }
 
     private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap)
@@ -656,6 +633,17 @@ public sealed partial class GridRenderer : Node3D
         m.SetShaderParameter("albedo_tex", _grassTex);
         m.SetShaderParameter("patch_width_m", patchWidth);
         m.SetShaderParameter("height_scale_m", System.Math.Max(1f, maxHeightMeters));
+        // Per-tier fade window (meters from the gimbal). G4 dithers in where
+        // it meets L1; G8 dithers in where it meets G4. Below fade_start_m
+        // every fragment discards (near tier covers it); above fade_end_m
+        // every fragment keeps (no near tier to cover).
+        const float chunkM = Chunk.Size * TileCoord.TileW;
+        const float tier1m = Tier1Range * chunkM;
+        const float tier3m = Tier3Range * chunkM;
+        const float fadeMargin = chunkM;
+        var fadeEnd = groupSize == Group4 ? tier1m : tier3m;
+        m.SetShaderParameter("fade_start_m", fadeEnd - fadeMargin);
+        m.SetShaderParameter("fade_end_m", fadeEnd);
         return m;
     }
 
@@ -707,14 +695,13 @@ public sealed partial class GridRenderer : Node3D
 
     private MeshInstance3D BuildInstance(TilePos originChunkKey, int lod)
     {
-        var mi = new MeshInstance3D
+        _ = lod;
+        return new MeshInstance3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey),
             MaterialOverride = _material,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
-        ApplyLodFade(mi, lod);
-        return mi;
     }
 
     private static ArrayMesh AssembleArrayMesh(MeshBuildResult r)

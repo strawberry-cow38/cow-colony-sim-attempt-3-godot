@@ -12,6 +12,14 @@ render_mode cull_disabled, specular_disabled, shadows_disabled;
 // Normals are reconstructed in the fragment shader via screen-space derivatives so
 // we don't need to ship per-vertex normals from the CPU path.
 
+// Orbit-gimbal world position set every frame by GridRenderer. The coarse
+// tier fades relative to this point — NOT the camera — so zoom/pitch don't
+// change which fragments show up, and the fade window reads from the
+// fragment's true world XY rather than the mesh-instance origin (which
+// sits at the patch midpoint but still disagrees with cam→AABB at the
+// edges).
+global uniform vec3 gimbal_pos;
+
 uniform sampler2D heightmap : hint_default_black, filter_linear, repeat_disable;
 uniform sampler2D albedo_tex : filter_linear_mipmap_anisotropic, repeat_enable;
 
@@ -19,16 +27,26 @@ uniform sampler2D albedo_tex : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float patch_width_m = 384.0;
 // Vertical scale: heightmap R channel (0..1) maps to [0, height_scale_m] meters.
 uniform float height_scale_m = 192.0;
+// Dither fade window: below fade_start_m every fragment is discarded; above
+// fade_end_m every fragment is kept. fade_end_m ≤ fade_start_m disables the
+// fade entirely (used where there is no coarse tier under this one).
+uniform float fade_start_m = 0.0;
+uniform float fade_end_m = 0.0;
 // Tint for debug / palette.
 // Darken to match the tone L0/G4 terrain lands at after StandardMaterial3D
 // shading — raw grass texels are brighter than the lit near-field look.
 uniform vec4 tint : source_color = vec4(0.7, 0.7, 0.7, 1.0);
 
+varying vec3 v_local_pos;
 varying vec3 v_world_pos;
 
 float sample_height(vec2 uv_local) {
 	// uv_local: [0..1] over patch.
 	return texture(heightmap, uv_local).r * height_scale_m;
+}
+
+float hash12(vec2 p) {
+	return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
 void vertex() {
@@ -37,22 +55,33 @@ void vertex() {
 	// bottom), so we can't derive the sample coord from position alone.
 	vec2 uv_local = UV;
 	VERTEX.y += sample_height(uv_local);
-	// Stash local-space position so the fragment shader can reconstruct a
-	// world-space normal via derivatives; terrain mesh has no rotation, so
-	// local ≈ world for the purposes of picking up-vs-side.
-	v_world_pos = VERTEX;
+	v_local_pos = VERTEX;
+	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	UV = VERTEX.xz * (1.0 / 1.5); // 1.5m per tile → 1 unit of UV = 1 tile
 }
 
 void fragment() {
+	// Gimbal-based dither fade. Evaluated per fragment so every part of a
+	// straddling patch fades at its own distance — close fragments vanish
+	// (L1 covers them), far fragments stay.
+	if (fade_end_m > fade_start_m) {
+		float d = distance(
+			vec2(v_world_pos.x, v_world_pos.z),
+			vec2(gimbal_pos.x, gimbal_pos.z));
+		float t = clamp((d - fade_start_m) / (fade_end_m - fade_start_m), 0.0, 1.0);
+		if (t < hash12(FRAGCOORD.xy)) discard;
+	}
+
 	// View-space normal for Godot's lighting (VERTEX is view-space in fragment).
 	vec3 dx = dFdx(VERTEX);
 	vec3 dy = dFdy(VERTEX);
 	NORMAL = normalize(cross(dy, dx));
 
-	// World-space normal to distinguish top faces (grass) from walls (dirt).
-	vec3 wdx = dFdx(v_world_pos);
-	vec3 wdy = dFdy(v_world_pos);
+	// World-space-adjacent normal (local differs from world by constant offset
+	// on terrain, which vanishes under derivatives) to distinguish top faces
+	// (grass) from walls (dirt).
+	vec3 wdx = dFdx(v_local_pos);
+	vec3 wdy = dFdy(v_local_pos);
 	vec3 world_n = normalize(cross(wdy, wdx));
 
 	// Atlas: grass cell at (col=0,row=0), dirt cell 10 at (col=2,row=2).
@@ -72,8 +101,8 @@ void fragment() {
 	// Side sample: project onto whichever horizontal axis runs along the wall.
 	// Compute both projections unconditionally so derivatives stay clean at
 	// face boundaries where fragment groups might straddle both.
-	vec2 wall_x_scaled = vec2(v_world_pos.x, v_world_pos.y) * (1.0 / 1.5);
-	vec2 wall_z_scaled = vec2(v_world_pos.z, v_world_pos.y) * (1.0 / 1.5);
+	vec2 wall_x_scaled = vec2(v_local_pos.x, v_local_pos.y) * (1.0 / 1.5);
+	vec2 wall_z_scaled = vec2(v_local_pos.z, v_local_pos.y) * (1.0 / 1.5);
 	vec2 dirt_uv_x = dirt_origin + fract(wall_x_scaled) * cell_span;
 	vec2 dirt_uv_z = dirt_origin + fract(wall_z_scaled) * cell_span;
 	vec4 dirt_x = textureGrad(albedo_tex, dirt_uv_x,
