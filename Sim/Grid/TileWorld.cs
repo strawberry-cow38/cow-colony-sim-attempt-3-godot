@@ -7,7 +7,15 @@ public sealed class TileWorld
     private readonly Dictionary<CellKey, ChunkState> _cellStates = new();
     private readonly Dictionary<CellKey, List<TilePos>> _chunksByCell = new();
 
+    // 2D terrain heightmap + kindmap keyed by chunk XZ. Exists alongside the
+    // 3D voxel grid — buildings/walls/stairs still live in _chunks, terrain
+    // itself (ground surface, slope, sand/water/grass) lives here. Paging
+    // eviction currently only touches voxel chunks; terrain stays resident.
+    private readonly Dictionary<(int cx, int cz), TerrainChunk> _terrainChunks = new();
+
     public int ChunkCount => _chunks.Count;
+    public int TerrainChunkCount => _terrainChunks.Count;
+    public IEnumerable<KeyValuePair<(int cx, int cz), TerrainChunk>> EnumerateTerrainChunks() => _terrainChunks;
 
     // Monotonic counter bumped whenever a tile mutates, a chunk is paged in, or
     // a chunk is evicted. Consumers (notably the renderer) snapshot this and
@@ -99,7 +107,80 @@ public sealed class TileWorld
         _chunkStates.Clear();
         _cellStates.Clear();
         _chunksByCell.Clear();
+        _terrainChunks.Clear();
         MutationTick++;
+    }
+
+    // ---- Terrain heightmap API -------------------------------------------
+
+    /// <summary>
+    /// Corner height at world-space (x, z) in integer tile-height units
+    /// (one unit = <see cref="SimConstants.TileHeightMeters"/>). Returns 0 if
+    /// the owning terrain chunk is not resident.
+    /// </summary>
+    public short TerrainHeightAt(int x, int z)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.Heights[lx, lz] : (short)0;
+    }
+
+    /// <summary>
+    /// Surface kind for tile (x, z). Tile (x, z) spans corners
+    /// (x, z)→(x+1, z+1). Returns <see cref="TileKind.Empty"/> if the chunk
+    /// isn't resident.
+    /// </summary>
+    public TileKind TerrainKindAt(int x, int z)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? (TileKind)tc.Kinds[lx, lz] : TileKind.Empty;
+    }
+
+    /// <summary>
+    /// Max absolute Δh (in tile units) between any two of tile (x, z)'s four
+    /// corner heights. 0 = flat, 1 = gentle ramp, ≥2 = cliff or wall.
+    /// </summary>
+    public int TerrainSlope(int x, int z)
+    {
+        var h00 = TerrainHeightAt(x, z);
+        var h10 = TerrainHeightAt(x + 1, z);
+        var h01 = TerrainHeightAt(x, z + 1);
+        var h11 = TerrainHeightAt(x + 1, z + 1);
+        var lo = System.Math.Min(System.Math.Min(h00, h10), System.Math.Min(h01, h11));
+        var hi = System.Math.Max(System.Math.Max(h00, h10), System.Math.Max(h01, h11));
+        return hi - lo;
+    }
+
+    public void SetTerrainHeight(int x, int z, short h)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetHeight(lx, lz, h);
+        MutationTick++;
+    }
+
+    public void SetTerrainKind(int x, int z, TileKind kind)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetKind(lx, lz, (byte)kind);
+        MutationTick++;
+    }
+
+    public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
+        => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
+
+    private TerrainChunk GetOrCreateTerrainChunk(int cx, int cz)
+    {
+        if (_terrainChunks.TryGetValue((cx, cz), out var tc)) return tc;
+        tc = new TerrainChunk();
+        _terrainChunks[(cx, cz)] = tc;
+        return tc;
+    }
+
+    private static (int cx, int cz, int lx, int lz) SplitXZ(int x, int z)
+    {
+        const int s = Chunk.Size;
+        var cx = FloorDiv(x, s);
+        var cz = FloorDiv(z, s);
+        return (cx, cz, x - cx * s, z - cz * s);
     }
 
     public IEnumerable<CellKey> InMemoryCells => _chunksByCell.Keys;

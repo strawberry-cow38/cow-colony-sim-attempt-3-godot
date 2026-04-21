@@ -87,4 +87,84 @@ public class WorldGenTests
         var b = FeatureResolver.Pick(42, new CellKey(3, -2));
         Assert.Equal(a, b);
     }
+
+    [Fact]
+    public void Generate_Populates_Terrain_Heightmap()
+    {
+        var world = new TileWorld();
+        WorldGen.Generate(world, seed: 1234, sizeX: 32, sizeZ: 32);
+
+        // Every column in the generated footprint must carry a terrain
+        // height matching the voxel surface (column top = height - 1, so
+        // stored corner height = height).
+        for (var x = -16; x < 16; x++)
+        for (var z = -16; z < 16; z++)
+        {
+            var h = world.TerrainHeightAt(x, z);
+            var surfaceY = WorldGen.SurfaceY(world, x, z);
+            Assert.Equal(surfaceY, h);
+        }
+    }
+
+    [Fact]
+    public void Generate_Heightmap_Kinds_Match_Surface()
+    {
+        var world = new TileWorld();
+        WorldGen.Generate(world, seed: 99, sizeX: 32, sizeZ: 32);
+
+        for (var x = -16; x < 16; x++)
+        for (var z = -16; z < 16; z++)
+        {
+            var h = world.TerrainHeightAt(x, z);
+            var kind = world.TerrainKindAt(x, z);
+            if (h < WorldGen.WaterLevelY)
+            {
+                Assert.Equal(TileKind.Water, kind);
+            }
+            else
+            {
+                // Land columns carry Floor or Sand — never Water / Solid /
+                // Empty — so the mesher can branch on kind alone.
+                Assert.True(kind == TileKind.Floor || kind == TileKind.Sand,
+                    $"({x},{z}) h={h} kind={kind}");
+            }
+        }
+    }
+
+    [Fact]
+    public void Generate_Heightmap_Is_Deterministic()
+    {
+        var a = new TileWorld();
+        var b = new TileWorld();
+        WorldGen.Generate(a, seed: 42, sizeX: 16, sizeZ: 16);
+        WorldGen.Generate(b, seed: 42, sizeX: 16, sizeZ: 16);
+
+        for (var x = -8; x < 8; x++)
+        for (var z = -8; z < 8; z++)
+        {
+            Assert.Equal(a.TerrainHeightAt(x, z), b.TerrainHeightAt(x, z));
+            Assert.Equal(a.TerrainKindAt(x, z), b.TerrainKindAt(x, z));
+        }
+    }
+
+    [Fact]
+    public void TerrainSlope_Reports_Max_Corner_Delta()
+    {
+        var world = new TileWorld();
+        // Flat quad
+        world.SetTerrainHeight(0, 0, 5);
+        world.SetTerrainHeight(1, 0, 5);
+        world.SetTerrainHeight(0, 1, 5);
+        world.SetTerrainHeight(1, 1, 5);
+        Assert.Equal(0, world.TerrainSlope(0, 0));
+
+        // 1-step ramp
+        world.SetTerrainHeight(1, 0, 6);
+        world.SetTerrainHeight(1, 1, 6);
+        Assert.Equal(1, world.TerrainSlope(0, 0));
+
+        // Cliff
+        world.SetTerrainHeight(1, 1, 9);
+        Assert.Equal(4, world.TerrainSlope(0, 0));
+    }
 }

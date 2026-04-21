@@ -137,6 +137,10 @@ public static class WorldGen
                 }
             }
 
+            // Dual write during vertex-terrain rollout. Voxel column still
+            // feeds the current mesher / pathfinder; the corner-heightmap is
+            // what P1's mesher + P2's slope A* will read. Once both readers
+            // move, the voxel column writes go away.
             var rockBase = Math.Min(0, height - 3);
             for (var y = rockBase; y < height - 1; y++)
             {
@@ -147,6 +151,18 @@ public static class WorldGen
             {
                 tiles.Set(new TilePos(x, y, z), water);
             }
+
+            // Heightmap: store the TOP corner of the column — the walkable
+            // surface — so corner (x, z) lands at the SW corner of tile
+            // (x, z). Lake columns store the raw land height (floor of the
+            // basin); water surface is implied by WaterLevelY. Kind per tile
+            // distinguishes grass/sand/water at the surface.
+            tiles.SetTerrainHeight(x, z, (short)height);
+            var surfaceKind = height < WaterLevelY
+                ? TileKind.Water
+                : (isShore ? TileKind.Sand : TileKind.Floor);
+            tiles.SetTerrainKind(x, z, surfaceKind);
+
             surfaceTiles++;
         }
         return surfaceTiles;
