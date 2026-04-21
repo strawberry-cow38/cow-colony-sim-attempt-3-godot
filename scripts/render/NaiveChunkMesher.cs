@@ -95,6 +95,86 @@ public sealed class NaiveChunkMesher : IChunkMesher
         }
     }
 
+    public sealed class HeightmapPatch
+    {
+        public float[,] Heights = null!;
+        public int SizeX;
+        public int SizeZ;
+        public int Revision;
+        public int LodLevel;
+        public float MaxHeightMeters;
+    }
+
+    public HeightmapPatch? BuildGroupHeightmapPatch(
+        List<GroupChunkEntry> entries, int groupChunks, int lodLevel)
+    {
+        var size = Chunk.Size;
+        var sizeX = groupChunks * size;
+        var sizeZ = groupChunks * size;
+        var heights = new float[sizeX + 1, sizeZ + 1];
+        var revSum = 0;
+        var any = false;
+
+        var byCol = new Dictionary<(int, int), List<GroupChunkEntry>>();
+        foreach (var e in entries)
+        {
+            revSum += e.Snap.Revision;
+            if (!byCol.TryGetValue((e.Lx, e.Lz), out var list))
+            {
+                list = new List<GroupChunkEntry>(4);
+                byCol[(e.Lx, e.Lz)] = list;
+            }
+            list.Add(e);
+        }
+
+        var th = TileCoord.TileH;
+        foreach (var ((cx, cz), list) in byCol)
+        {
+            list.Sort((a, b) => b.ChunkY.CompareTo(a.ChunkY));
+            for (var lz = 0; lz < size; lz++)
+            for (var lx = 0; lx < size; lx++)
+            {
+                var top = -1;
+                foreach (var ent in list)
+                {
+                    var found = false;
+                    for (var ly = size - 1; ly >= 0; ly--)
+                    {
+                        var t = ent.Snap[lx, ly, lz];
+                        if (!t.IsEmpty) { top = ent.ChunkY * size + ly; found = true; break; }
+                    }
+                    if (found) break;
+                }
+                if (top >= 0)
+                {
+                    any = true;
+                    heights[cx * size + lx, cz * size + lz] = (top + 1) * th;
+                }
+            }
+        }
+
+        if (!any) return null;
+
+        // Replicate last col/row so bilinear sampling at uv=1 works.
+        for (var z = 0; z < sizeZ; z++) heights[sizeX, z] = heights[sizeX - 1, z];
+        for (var x = 0; x <= sizeX; x++) heights[x, sizeZ] = heights[x, sizeZ - 1];
+
+        float maxH = 0f;
+        for (var z = 0; z <= sizeZ; z++)
+            for (var x = 0; x <= sizeX; x++)
+                if (heights[x, z] > maxH) maxH = heights[x, z];
+
+        return new HeightmapPatch
+        {
+            Heights = heights,
+            SizeX = sizeX + 1,
+            SizeZ = sizeZ + 1,
+            Revision = revSum,
+            LodLevel = lodLevel,
+            MaxHeightMeters = maxH,
+        };
+    }
+
     public MeshBuildResult? BuildGroupMesh(
         List<GroupChunkEntry> entries, TilePos baseChunkKey, int groupChunks, int step, int lodLevel,
         int cliffMinDelta = 1)
