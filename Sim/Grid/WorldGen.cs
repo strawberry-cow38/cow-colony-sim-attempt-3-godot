@@ -30,6 +30,11 @@ public static class WorldGen
     // No bilerp gate needed — plains/hills/mountains never cross zero.
     public const int WaterLevelY = 0;
 
+    // Any neighbor-column height delta >= this many tiles (= 2.25m) is
+    // promoted to a vertical cliff edge in the heightmap. Below this, the
+    // mesher renders a smooth slope / ramp.
+    public const int CliffMinDelta = 3;
+
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
         float frequency = DefaultFrequency)
@@ -164,6 +169,47 @@ public static class WorldGen
             tiles.SetTerrainKind(x, z, surfaceKind);
 
             surfaceTiles++;
+        }
+
+        // Cliff detection pass. Scan every tile edge in the generated
+        // footprint; where the step between adjacent columns reaches
+        // CliffMinDelta the upper tile owns the flag. Shared corners on that
+        // edge are bumped to the upper tile's column height so stored heights
+        // consistently describe the upper platform; the lower-side tile uses
+        // its CliffLowerW/N snapshot override to pull its corners back to its
+        // own (lower) height at render time.
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+        {
+            var hHere = heights[xi, zi];
+            var x = xi - halfX;
+            var z = zi - halfZ;
+
+            if (xi + 1 < sizeX)
+            {
+                var hEast = heights[xi + 1, zi];
+                if (hHere - hEast >= CliffMinDelta)
+                {
+                    tiles.SetTerrainCliffE(x, z, (short)hEast);
+                    if (tiles.TerrainHeightAt(x + 1, z) < hHere)
+                        tiles.SetTerrainHeight(x + 1, z, (short)hHere);
+                    if (tiles.TerrainHeightAt(x + 1, z + 1) < hHere)
+                        tiles.SetTerrainHeight(x + 1, z + 1, (short)hHere);
+                }
+            }
+
+            if (zi + 1 < sizeZ)
+            {
+                var hSouth = heights[xi, zi + 1];
+                if (hHere - hSouth >= CliffMinDelta)
+                {
+                    tiles.SetTerrainCliffS(x, z, (short)hSouth);
+                    if (tiles.TerrainHeightAt(x, z + 1) < hHere)
+                        tiles.SetTerrainHeight(x, z + 1, (short)hHere);
+                    if (tiles.TerrainHeightAt(x + 1, z + 1) < hHere)
+                        tiles.SetTerrainHeight(x + 1, z + 1, (short)hHere);
+                }
+            }
         }
         return surfaceTiles;
     }

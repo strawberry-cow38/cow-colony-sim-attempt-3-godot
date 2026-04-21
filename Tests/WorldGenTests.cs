@@ -276,7 +276,6 @@ public class WorldGenTests
     public void SnapshotTerrain_Derives_W_Bit_Across_Chunk_Seam()
     {
         var world = new TileWorld();
-        const int s = TerrainChunk.Size;
         // -X neighbor chunk (-1, 0) owns world column x=-1. Its E edge is our
         // (lx=0) tile's W edge.
         world.SetTerrainHeight(-1, 4, 20);
@@ -345,6 +344,104 @@ public class WorldGenTests
         var rev = tc.Revision;
         tc.SetCliffE(0, 0, lowerHeight: 5);
         Assert.Equal(rev, tc.Revision);
+    }
+
+    [Fact]
+    public void Generate_Emits_Cliff_Flags_On_Rough_Terrain()
+    {
+        // 256x256 across many cells covers mesa / cubby / mountain features
+        // — the ridged-noise + mesa pass reliably produces corner-delta
+        // jumps >= CliffMinDelta somewhere in that footprint.
+        var world = new TileWorld();
+        WorldGen.Generate(world, seed: 1234, sizeX: 256, sizeZ: 256);
+
+        var flagged = 0;
+        for (var cx = -8; cx <= 8; cx++)
+        for (var cz = -8; cz <= 8; cz++)
+        {
+            var tc = world.GetTerrainChunkOrNull(cx, cz);
+            if (tc == null) continue;
+            for (var lx = 0; lx < TerrainChunk.Size; lx++)
+            for (var lz = 0; lz < TerrainChunk.Size; lz++)
+                if (tc.CliffMask[lx, lz] != 0) flagged++;
+        }
+        Assert.True(flagged > 0,
+            "expected worldgen to emit at least one cliff flag in a 256x256 footprint");
+    }
+
+    [Fact]
+    public void Generate_Cliffs_Are_Deterministic_For_Same_Seed()
+    {
+        var a = new TileWorld();
+        var b = new TileWorld();
+        WorldGen.Generate(a, seed: 777, sizeX: 64, sizeZ: 64);
+        WorldGen.Generate(b, seed: 777, sizeX: 64, sizeZ: 64);
+
+        for (var cx = -2; cx <= 2; cx++)
+        for (var cz = -2; cz <= 2; cz++)
+        {
+            var ta = a.GetTerrainChunkOrNull(cx, cz);
+            var tb = b.GetTerrainChunkOrNull(cx, cz);
+            if (ta == null && tb == null) continue;
+            Assert.NotNull(ta);
+            Assert.NotNull(tb);
+            for (var lx = 0; lx < TerrainChunk.Size; lx++)
+            for (var lz = 0; lz < TerrainChunk.Size; lz++)
+            {
+                Assert.Equal(ta!.CliffMask[lx, lz], tb!.CliffMask[lx, lz]);
+                Assert.Equal(ta.CliffLowerE[lx, lz], tb.CliffLowerE[lx, lz]);
+                Assert.Equal(ta.CliffLowerS[lx, lz], tb.CliffLowerS[lx, lz]);
+            }
+        }
+    }
+
+    [Fact]
+    public void Generate_Cliff_Edge_Corners_Match_Upper_Height()
+    {
+        // For every E / S cliff flagged by worldgen, the shared corners on
+        // that edge must be stored at the upper tile's own column height —
+        // so the mesher can read "stored = upper" without cross-tile math.
+        var world = new TileWorld();
+        WorldGen.Generate(world, seed: 42, sizeX: 128, sizeZ: 128);
+
+        var checkedCliffs = 0;
+        for (var x = -64; x < 63; x++)
+        for (var z = -64; z < 63; z++)
+        {
+            var (cx, cz) = (FloorDivForTest(x, TerrainChunk.Size), FloorDivForTest(z, TerrainChunk.Size));
+            var tc = world.GetTerrainChunkOrNull(cx, cz);
+            if (tc == null) continue;
+            var lx = x - cx * TerrainChunk.Size;
+            var lz = z - cz * TerrainChunk.Size;
+            var mask = tc.CliffMask[lx, lz];
+            if ((mask & TerrainChunk.CliffBitE) != 0)
+            {
+                var upper = world.TerrainHeightAt(x, z);
+                Assert.Equal(upper, world.TerrainHeightAt(x + 1, z));
+                Assert.Equal(upper, world.TerrainHeightAt(x + 1, z + 1));
+                Assert.True(tc.CliffLowerE[lx, lz] < upper,
+                    $"E cliff at ({x},{z}): lower {tc.CliffLowerE[lx, lz]} must be < upper {upper}");
+                checkedCliffs++;
+            }
+            if ((mask & TerrainChunk.CliffBitS) != 0)
+            {
+                var upper = world.TerrainHeightAt(x, z);
+                Assert.Equal(upper, world.TerrainHeightAt(x, z + 1));
+                Assert.Equal(upper, world.TerrainHeightAt(x + 1, z + 1));
+                Assert.True(tc.CliffLowerS[lx, lz] < upper,
+                    $"S cliff at ({x},{z}): lower {tc.CliffLowerS[lx, lz]} must be < upper {upper}");
+                checkedCliffs++;
+            }
+        }
+        Assert.True(checkedCliffs > 0, "expected at least one cliff to verify");
+    }
+
+    private static int FloorDivForTest(int a, int b)
+    {
+        var q = a / b;
+        var r = a % b;
+        if ((r != 0) && ((r < 0) != (b < 0))) q--;
+        return q;
     }
 
     [Fact]
