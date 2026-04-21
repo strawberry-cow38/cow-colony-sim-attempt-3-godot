@@ -94,6 +94,15 @@ public sealed partial class DayNightRenderer : Node3D
             GlowEnabled = false,
             TonemapMode = Godot.Environment.ToneMapper.Filmic,
             TonemapExposure = 1.0f,
+            // Fog ramps from the G4 near edge (6 chunks × 24m) to the G8 far
+            // edge (64 chunks × 24m). Past that, geometry is clipped entirely.
+            FogEnabled = true,
+            FogMode = Godot.Environment.FogModeEnum.Depth,
+            FogDepthBegin = 144f,
+            FogDepthEnd = 1536f,
+            FogDepthCurve = 1.0f,
+            FogLightColor = new Color(0.75f, 0.80f, 0.85f),
+            FogLightEnergy = 1.0f,
         };
         _worldEnv.Environment = env;
     }
