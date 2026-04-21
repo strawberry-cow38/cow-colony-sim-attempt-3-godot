@@ -42,6 +42,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private Label _currentResolutionLabel = null!;
     private HSlider _renderDistanceSlider = null!;
     private Label _renderDistanceLabel = null!;
+    private CheckBox _legacyTerrainCheck = null!;
 
     private int _resolutionIndex = 2;
     private int _windowModeIndex = 0;
@@ -50,6 +51,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private bool _fxaaEnabled = true;
     private bool _vsyncEnabled = false;
     private int _renderDistance = 128;
+    private bool _legacyTerrainVisible = true;
 
     public override void _Ready()
     {
@@ -147,6 +149,14 @@ public sealed partial class SettingsMenu : CanvasLayer
         };
         vb.AddChild(_renderDistanceSlider);
 
+        _legacyTerrainCheck = new CheckBox
+        {
+            Text = "Show legacy voxel terrain",
+            ButtonPressed = _legacyTerrainVisible,
+        };
+        _legacyTerrainCheck.Toggled += on => { _legacyTerrainVisible = on; ApplyWorld(); Save(); };
+        vb.AddChild(_legacyTerrainCheck);
+
         vb.AddChild(new HSeparator());
         _checkUpdateButton = new Button { Text = "Check for Updates" };
         _checkUpdateButton.Pressed += OnCheckUpdatePressed;
@@ -201,6 +211,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private void ApplyWorld()
     {
         GridRenderer.MaxChunkDistance = _renderDistance;
+        GridRenderer.ShowVoxelTerrain = _legacyTerrainVisible;
     }
 
     private void Load()
@@ -214,6 +225,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _fxaaEnabled = (bool)cfg.GetValue("render", "fxaa", true);
         _vsyncEnabled = (bool)cfg.GetValue("render", "vsync", false);
         _renderDistance = Mathf.Clamp((int)cfg.GetValue("world", "render_distance", 128), 8, 256);
+        _legacyTerrainVisible = (bool)cfg.GetValue("world", "legacy_terrain", true);
     }
 
     private void Save()
@@ -226,6 +238,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         cfg.SetValue("render", "fxaa", _fxaaEnabled);
         cfg.SetValue("render", "vsync", _vsyncEnabled);
         cfg.SetValue("world", "render_distance", _renderDistance);
+        cfg.SetValue("world", "legacy_terrain", _legacyTerrainVisible);
         cfg.Save(ConfigPath);
     }
 

@@ -27,6 +27,12 @@ public sealed partial class GridRenderer : Node3D
     public static int MaxChunkDistance { get; set; } = 64;
 
     public static bool GpuTerrainEnabled = true;
+    // P1b A/B: hide legacy voxel terrain (L0/L1 per-chunk slots) so the
+    // smooth corner-heightmap mesh renders alone. Default true so the world
+    // still renders until the vertex mesher fully replaces the voxel top
+    // surface in P1c. G4/G8 far tiers are untouched — they cover distance
+    // the smooth mesher doesn't run on yet.
+    public static bool ShowVoxelTerrain = true;
 
     // Every non-LIVE tier renders this far below its true Y. Keeps coarse
     // tiers from Z-fighting with the L0 voxel mesh across the fade band
@@ -401,7 +407,7 @@ public sealed partial class GridRenderer : Node3D
                 AddChild(slot.MeshInstance);
                 _slots[chunkKey] = slot;
             }
-            slot.MeshInstance.Visible = true;
+            slot.MeshInstance.Visible = ShowVoxelTerrain;
             if (slot.InFlight) continue;
             if (slot.LastCheckedMutationTick == mutationTick && slot.CurrentLod == tier) continue;
             if (_frameDispatchChunk >= DispatchChunkBudget) continue;
