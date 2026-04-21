@@ -39,6 +39,10 @@ uniform float fade_in_start_m = 0.0;
 uniform float fade_in_end_m = 0.0;
 uniform float fade_out_start_m = 0.0;
 uniform float fade_out_end_m = 0.0;
+// Hard clip past fog depth-end. Distance fog already whites-out the horizon,
+// but transparent-over-sky G8 fragments can still punch through when their
+// dither keeps them; discarding past this distance stops those pixels.
+uniform float fog_end_m = 1e9;
 // Tint for debug / palette.
 // Darken to match the tone L0/G4 terrain lands at after StandardMaterial3D
 // shading — raw grass texels are brighter than the lit near-field look.
@@ -75,6 +79,7 @@ void fragment() {
 	float d = distance(
 		vec2(v_world_pos.x, v_world_pos.z),
 		vec2(gimbal_pos.x, gimbal_pos.z));
+	if (d > fog_end_m) discard;
 	float h = hash12(FRAGCOORD.xy);
 	if (fade_in_end_m > fade_in_start_m) {
 		float t = clamp((d - fade_in_start_m) / (fade_in_end_m - fade_in_start_m), 0.0, 1.0);
