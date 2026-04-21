@@ -30,10 +30,11 @@ public sealed partial class GridRenderer : Node3D
 
     // Every non-LIVE tier renders this far below its true Y. Keeps coarse
     // tiers from Z-fighting with the L0 voxel mesh across the fade band
-    // where both are drawn — LIVE always wins the depth test. 1m is enough
-    // to kill fighting on near-field flat plains without being visible
-    // through the dither-fade boundary at the far edge.
-    private const float LodYSink = 1.0f;
+    // where both are drawn — LIVE always wins the depth test. 15cm is
+    // well above depth-buffer precision at typical view distances but
+    // small enough that the dither-crossfade band stays visually flush
+    // (1m was > one full 0.75m tile and shimmered at the seam).
+    private const float LodYSink = 0.15f;
 
     private readonly Dictionary<TilePos, ChunkRenderSlot> _slots = new();
     private readonly Dictionary<TilePos, GroupRenderSlot> _g4Slots = new();
