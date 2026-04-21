@@ -50,42 +50,20 @@ public sealed class HeightmapTerrainMesher
 
             var mask = snap.CliffMask[lx, lz];
 
-            short h00 = snap.Heights[lx,     lz    ];
-            short h10 = snap.Heights[lx + 1, lz    ];
-            short h11 = snap.Heights[lx + 1, lz + 1];
-            short h01 = snap.Heights[lx,     lz + 1];
+            // Own column surface — the tile's "I belong on plateau-Y X" height.
+            // SW corner's natural value equals column (cx*s+lx, cz*s+lz) since
+            // worldgen stores per-column surface into the shared heightmap.
+            var ownCol = snap.Heights[lx, lz];
 
-            // E cliff: I am the upper side. Hoist my east corners (SE, NE)
-            // to my own platform height locally — without touching shared
-            // heightmap corners (which would spike diagonal-adjacent tiles).
-            if ((mask & TerrainSnapshot.CliffBitE) != 0)
-            {
-                var upper = snap.CliffUpperE[lx, lz];
-                if (upper > h10) h10 = upper;
-                if (upper > h11) h11 = upper;
-            }
-            // S cliff: I am upper on S. Hoist NW and NE to platform height.
-            if ((mask & TerrainSnapshot.CliffBitS) != 0)
-            {
-                var upper = snap.CliffUpperS[lx, lz];
-                if (upper > h01) h01 = upper;
-                if (upper > h11) h11 = upper;
-            }
-            // W cliff: I am the lower side. Pull my west corners (SW, NW)
-            // down from whatever natural corner height to my own cliff-lower.
-            if ((mask & TerrainSnapshot.CliffBitW) != 0)
-            {
-                var lower = snap.CliffLowerW[lx, lz];
-                h00 = lower;
-                h01 = lower;
-            }
-            // N cliff: I am lower on N. Pull NW and NE down.
-            if ((mask & TerrainSnapshot.CliffBitN) != 0)
-            {
-                var lower = snap.CliffLowerN[lx, lz];
-                h01 = lower;
-                h11 = lower;
-            }
+            // Per-corner render height: MaxCornerY carries the max Y any
+            // adjacent cliff wants this corner raised to. We apply the hoist
+            // ONLY when the tile's own column is tall enough to participate
+            // in that plateau — lower / diagonal tiles stay at natural
+            // Heights, so there's no spike above voxel rock (= no hole).
+            short h00 = Render(snap, lx,     lz,     ownCol);
+            short h10 = Render(snap, lx + 1, lz,     ownCol);
+            short h11 = Render(snap, lx + 1, lz + 1, ownCol);
+            short h01 = Render(snap, lx,     lz + 1, ownCol);
 
             var waterDrop = kind == TileKind.Water ? WaterTopDropMeters : 0f;
             var y00 = h00 * th - waterDrop;
@@ -183,6 +161,13 @@ public sealed class HeightmapTerrainMesher
     // face should be visible from. Face is degenerate (zero-area) when the
     // two upper corners are both at or below the lower Y; skipped in that
     // case so we don't emit a flipped / zero-area quad.
+    private static short Render(TerrainSnapshot snap, int cx, int cz, short ownCol)
+    {
+        var natural = snap.Heights[cx, cz];
+        var hoist   = snap.MaxCornerY[cx, cz];
+        return ownCol >= hoist ? hoist : natural;
+    }
+
     private static void EmitCliffFace(
         List<Vector3> verts, List<Vector3> normals, List<Color> colors,
         List<Vector2> uvs, List<int> indices,

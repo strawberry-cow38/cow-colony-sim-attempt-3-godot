@@ -21,6 +21,13 @@ public sealed class TerrainSnapshot
     // whichever neighbor chunk owns them (falling back to the edge value if
     // no neighbor exists).
     public readonly short[,] Heights = new short[Size + 1, Size + 1];
+    // 17×17 corner render-ceiling: the max Y any adjacent cliff wants this
+    // corner lifted to. Initialized to natural Heights, then bumped per-cliff
+    // during snapshot build. Mesher uses this per-tile: a tile's corner
+    // renders at MaxCornerY iff the tile's own column height is >= that value
+    // (= tile is part of the upper plateau). Lower/diagonal tiles stay at
+    // natural Heights, so no spike → no hole.
+    public readonly short[,] MaxCornerY = new short[Size + 1, Size + 1];
     // 16×16 tile surface kinds — Kinds[lx, lz] for tile (cx*Size+lx, cz*Size+lz).
     public readonly byte[,] Kinds = new byte[Size, Size];
 
