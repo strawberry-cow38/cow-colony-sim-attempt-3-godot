@@ -45,7 +45,9 @@ public sealed partial class GridRenderer : Node3D
     private StandardMaterial3D? _material;
     private Shader? _terrainShader;
     private Texture2D? _grassTex;
+    private ArrayMesh? _g8PatchMesh;
     private ArrayMesh? _g16PatchMesh;
+    private const int G8CellsPerSide = 16;  // 12m per cell at 192m patch
     private const int G16CellsPerSide = 32; // 12m per cell at 384m patch
 
     // Classify cache. The 27k-chunk walk was ~1.4ms every frame even when
@@ -75,8 +77,10 @@ public sealed partial class GridRenderer : Node3D
         if (GpuTerrainEnabled)
         {
             _terrainShader = GD.Load<Shader>("res://scripts/render/shaders/terrain_heightmap.gdshader");
-            var patchWidth = Group16 * Chunk.Size * TileCoord.TileW;
-            _g16PatchMesh = GpuTerrain.BuildPatchMesh(G16CellsPerSide, patchWidth);
+            var g16Width = Group16 * Chunk.Size * TileCoord.TileW;
+            var g8Width  = Group8  * Chunk.Size * TileCoord.TileW;
+            _g16PatchMesh = GpuTerrain.BuildPatchMesh(G16CellsPerSide, g16Width);
+            _g8PatchMesh  = GpuTerrain.BuildPatchMesh(G8CellsPerSide,  g8Width);
         }
     }
 
@@ -163,12 +167,17 @@ public sealed partial class GridRenderer : Node3D
         Profiler.End("PerChunk");
 
         Profiler.Begin("Groups");
-        UpdateGroupSlots(_g4Slots,  g4Masks,  Group4,  lod: 3, step: 4,  cliffMinDelta: 1);
-        UpdateGroupSlots(_g8Slots,  g8Masks,  Group8,  lod: 4, step: 32, cliffMinDelta: 3);
+        UpdateGroupSlots(_g4Slots, g4Masks, Group4, lod: 3, step: 4, cliffMinDelta: 1);
         if (GpuTerrainEnabled)
+        {
+            UpdateGpuGroupSlots(_g8Slots, g8Masks, Group8, lod: 4);
             UpdateGpuGroupSlots(_g16Slots, g16Masks, Group16, lod: 5);
+        }
         else
+        {
+            UpdateGroupSlots(_g8Slots, g8Masks, Group8, lod: 4, step: 32, cliffMinDelta: 3);
             UpdateGroupSlots(_g16Slots, g16Masks, Group16, lod: 5, step: 64, cliffMinDelta: 6);
+        }
         Profiler.End("Groups");
 
         Profiler.SetCounter("L0+L1 slots", _slots.Count);
@@ -249,13 +258,13 @@ public sealed partial class GridRenderer : Node3D
             {
                 var tex = GpuTerrain.BuildHeightmapTexture(
                     patch.Heights, patch.SizeX, patch.SizeZ, patch.MaxHeightMeters);
-                slot.MeshInstance.Mesh = _g16PatchMesh;
-                slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(patch.MaxHeightMeters, tex);
+                slot.MeshInstance.Mesh = groupSize == Group8 ? _g8PatchMesh : _g16PatchMesh;
+                slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex);
             }
             slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = patch?.LodLevel ?? lod;
-            Profiler.IncRate("G16gpu up/s");
+            Profiler.IncRate(groupSize == Group8 ? "G8gpu up/s" : "G16gpu up/s");
         }
     }
 
@@ -396,13 +405,14 @@ public sealed partial class GridRenderer : Node3D
         Dictionary<TilePos, List<TilePos>> masks,
         int groupSize, int lod)
     {
+        var patchMesh = groupSize == Group8 ? _g8PatchMesh! : _g16PatchMesh!;
         foreach (var (groupKey, chunkKeys) in masks)
         {
             if (!table.TryGetValue(groupKey, out var slot))
             {
                 slot = new GroupRenderSlot
                 {
-                    MeshInstance = BuildGpuInstance(groupKey),
+                    MeshInstance = BuildGpuInstance(groupKey, patchMesh),
                     CurrentLod = -1,
                 };
                 AddChild(slot.MeshInstance);
@@ -448,7 +458,7 @@ public sealed partial class GridRenderer : Node3D
                 var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 var patch = _mesher.BuildGroupHeightmapPatch(entries, size, lodCaptured);
                 var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                Profiler.RecordMs("Build G16 GPU", ms);
+                Profiler.RecordMs(size == Group8 ? "Build G8 GPU" : "Build G16 GPU", ms);
                 _completedGpuGroup.Enqueue((key, size, patch, lodCaptured, maskHashCaptured));
             });
         }
@@ -458,19 +468,19 @@ public sealed partial class GridRenderer : Node3D
         }
     }
 
-    private MeshInstance3D BuildGpuInstance(TilePos originChunkKey)
+    private MeshInstance3D BuildGpuInstance(TilePos originChunkKey, ArrayMesh patchMesh)
     {
         return new MeshInstance3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey),
-            Mesh = _g16PatchMesh,
+            Mesh = patchMesh,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
     }
 
-    private ShaderMaterial BuildTerrainMaterial(float maxHeightMeters, ImageTexture heightmap)
+    private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap)
     {
-        var patchWidth = Group16 * Chunk.Size * TileCoord.TileW;
+        var patchWidth = groupSize * Chunk.Size * TileCoord.TileW;
         var m = new ShaderMaterial { Shader = _terrainShader };
         m.SetShaderParameter("heightmap", heightmap);
         m.SetShaderParameter("albedo_tex", _grassTex);
