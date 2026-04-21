@@ -8,37 +8,41 @@ public static class WorldGen
     public const int DefaultMaxHeight = 103;
     public const float DefaultFrequency = 0.02f;
 
-    // Mesa: rare, low-frequency mask that clamps height to a flat top only
-    // where the mask exceeds threshold. Scattered buildable plateaus on top
-    // of otherwise jagged mountains — no global staircase terracing, so
-    // default mountains keep the imposing ridged-noise shape.
-    private const float MesaThreshold = 0.72f;
-    private const float MesaBlendBand = 0.10f;
-    private const float MesaMinHeight = 35f;
-    private const float MesaStepTiles = 15f;
-
-    // Cubby: shallow flat pocket anywhere on the map. Anywhere the cubby
-    // noise exceeds the threshold the local surface is forced to a flat
-    // depressed level, carving hideable outpost nooks into hills/mountains.
-    private const float CubbyThreshold = 0.55f;
-    private const float CubbyBlendBand = 0.15f;
-    private const float CubbyDepthTiles = 6f;
-
-    // Sea level. Lake cells sample heights below 0 so they dig real basins
-    // into the world; every other feature stays positive. Water tiles fill
-    // every column whose surface y < WaterLevelY up to (WaterLevelY - 1).
-    // No bilerp gate needed — plains/hills/mountains never cross zero.
+    // Sea level. Columns below this fill with Water tiles up to (WaterLevelY-1).
     public const int WaterLevelY = 0;
+
+    // Mountain region onset. MountainMask noise above 0.45 begins ramping into
+    // ridge-shaped peaks; above 0.70 is fully mountainous. Smoothstep-blended.
+    private const float MountainOnset = 0.45f;
+    private const float MountainFull  = 0.70f;
+
+    // Plateau quantization. Above this elevation, heights snap to tier
+    // multiples so adjacent tiles within one tier share a flat value. Cliff
+    // faces form along tier boundaries — long continuous contours instead
+    // of scattered per-tile spikes.
+    private const float QuantStart = 15f;
+    private const float TierStep   = 6f;  // > CliffDelta so one step = one clean cliff.
+
+    // Lake carve. Mask above onset pulls height below sea level; only fires
+    // when base elevation is already low so mountains stay dry.
+    private const float LakeOnset = 0.58f;
+    private const float LakeFull  = 0.78f;
+    private const float LakeMaxBaseH = 8f;
+
+    // Detail noise amplitude. Strictly < CliffDelta so adjacent tiles never
+    // disagree by more than CliffDelta from detail alone — no spurious cliffs
+    // in plains / hills. Within a quantized tier this remains true because
+    // both tiles sit at the same quantized floor plus their own detail.
+    private const float DetailAmplitude = 1.3f;
 
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
         float frequency = DefaultFrequency)
     {
-        var noises = new FeatureNoises(seed);
+        _ = frequency;
+        var noise = new NoiseStack(seed);
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
-        const int cellSize = SimConstants.CellSizeTiles;
-        const int cellHalf = cellSize / 2;
 
         var heights = new int[sizeX, sizeZ];
         Parallel.For(0, sizeX, xi =>
@@ -48,59 +52,50 @@ public static class WorldGen
                 var x = xi - halfX;
                 var z = zi - halfZ;
 
-                // 4-cell bilerp anchored on cell centers. Guarantees C0
-                // continuity across cell borders because weights sum to 1
-                // and each corner's feature height is a continuous global
-                // noise sampled at (x, z).
-                float cxf = (x - (float)cellHalf) / cellSize;
-                float czf = (z - (float)cellHalf) / cellSize;
-                int cx0 = (int)MathF.Floor(cxf);
-                int cz0 = (int)MathF.Floor(czf);
-                float fx = cxf - cx0;
-                float fz = czf - cz0;
-                float wx = Smooth(fx);
-                float wz = Smooth(fz);
+                // Continent: slow, gentle base elevation — rolling pasture.
+                var continent = noise.Continent.GetNoise(x, z);      // -1..1
+                var baseH = 2f + continent * 6f;                      // -4..+8
 
-                var f00 = FeatureResolver.Pick(seed, new CellKey(cx0, cz0));
-                var f10 = FeatureResolver.Pick(seed, new CellKey(cx0 + 1, cz0));
-                var f01 = FeatureResolver.Pick(seed, new CellKey(cx0, cz0 + 1));
-                var f11 = FeatureResolver.Pick(seed, new CellKey(cx0 + 1, cz0 + 1));
-
-                float h00 = noises.SampleHeight(f00, x, z);
-                float h10 = noises.SampleHeight(f10, x, z);
-                float h01 = noises.SampleHeight(f01, x, z);
-                float h11 = noises.SampleHeight(f11, x, z);
-
-                float h = (1f - wx) * (1f - wz) * h00
-                        + wx         * (1f - wz) * h10
-                        + (1f - wx) * wz         * h01
-                        + wx         * wz         * h11;
-
-                // Mesa pass. Rare low-freq mask — only flat-tops scattered
-                // peaks. Leaves the rest of a mountain cell as natural
-                // jagged ridged noise instead of the old global staircase.
-                var mesaN = (noises.Mesa.GetNoise(x, z) + 1f) * 0.5f;
-                if (mesaN > MesaThreshold && h > MesaMinHeight)
+                // Mountain lift. Smooth mask picks out mountainous regions.
+                // Ridged FBm within the mask produces dramatic peak-and-valley
+                // shapes; quantization below converts the resulting gradient
+                // into clean terraced plateaus with continuous cliff edges.
+                var maskRaw = (noise.MountainMask.GetNoise(x, z) + 1f) * 0.5f;
+                var mountainWeight = Smoothstep(MountainOnset, MountainFull, maskRaw);
+                if (mountainWeight > 0f)
                 {
-                    var over = h - MesaMinHeight;
-                    var band = MathF.Floor(over / MesaStepTiles) * MesaStepTiles;
-                    var mesaTop = MesaMinHeight + band;
-                    var t = Smooth(MathF.Min(1f, (mesaN - MesaThreshold) / MesaBlendBand));
-                    h = h + (mesaTop - h) * t;
+                    var ridge = (noise.Ridge.GetNoise(x, z) + 1f) * 0.5f;
+                    var mountainH = 12f + ridge * 90f;                // 12..102
+                    baseH = Lerp(baseH, mountainH, mountainWeight);
                 }
 
-                // Cubby pass. noise in [-1, 1]; above threshold force a flat
-                // depressed plateau. Blend band keeps edges walkable instead
-                // of a sharp wall.
-                var cubbyN = (noises.Cubby.GetNoise(x, z) + 1f) * 0.5f;
-                if (cubbyN > CubbyThreshold)
+                // Plateau quantization. Step size > CliffDelta so every tier
+                // boundary produces exactly one cliff wall in the mesher.
+                if (baseH > QuantStart)
                 {
-                    var floor = MathF.Max(minHeight + 1f, h - CubbyDepthTiles);
-                    var t = Smooth(MathF.Min(1f, (cubbyN - CubbyThreshold) / CubbyBlendBand));
-                    h = h + (floor - h) * t;
+                    var over = baseH - QuantStart;
+                    var tier = MathF.Floor(over / TierStep) * TierStep;
+                    baseH = QuantStart + tier;
                 }
 
-                int hi = (int)MathF.Round(h);
+                // Detail pass. Capped < CliffDelta so flat plains never spike.
+                var detail = noise.Detail.GetNoise(x, z) * DetailAmplitude;
+
+                // Lake carve. Mask-weighted pull toward a negative floor only
+                // when base is low enough to sit near sea level — mountain
+                // lakes never appear, which keeps cliff regions dry.
+                if (baseH < LakeMaxBaseH)
+                {
+                    var lakeMask = (noise.Lake.GetNoise(x, z) + 1f) * 0.5f;
+                    var lakeWeight = Smoothstep(LakeOnset, LakeFull, lakeMask);
+                    if (lakeWeight > 0f)
+                    {
+                        var lakeFloor = -4f - lakeMask * 4f;          // -4..-8
+                        baseH = Lerp(baseH, lakeFloor, lakeWeight);
+                    }
+                }
+
+                int hi = (int)MathF.Round(baseH + detail);
                 if (hi < minHeight) hi = minHeight;
                 if (hi > maxHeight) hi = maxHeight;
                 heights[xi, zi] = hi;
@@ -119,10 +114,8 @@ public static class WorldGen
             var x = xi - halfX;
             var z = zi - halfZ;
 
-            // Shore detection: a land column is "shore" if its surface is
-            // within 2 tiles of sea level AND any 8-neighbor column is a
-            // submerged lake column. Paints a sandy band around every lake
-            // instead of grass running right to the waterline.
+            // Shore detection: a land column within 2 tiles of sea level with
+            // any submerged 8-neighbor is painted sand instead of grass.
             var isShore = false;
             if (height >= WaterLevelY && height <= WaterLevelY + 2)
             {
@@ -137,10 +130,6 @@ public static class WorldGen
                 }
             }
 
-            // Dual write during vertex-terrain rollout. Voxel column still
-            // feeds the current mesher / pathfinder; the corner-heightmap is
-            // what P1's mesher + P2's slope A* will read. Once both readers
-            // move, the voxel column writes go away.
             var rockBase = Math.Min(0, height - 3);
             for (var y = rockBase; y < height - 1; y++)
             {
@@ -152,8 +141,6 @@ public static class WorldGen
                 tiles.Set(new TilePos(x, y, z), water);
             }
 
-            // Column height (walkable floor Y) + surface kind. Pathfinding
-            // reads column height; render corners are derived below.
             tiles.SetTerrainHeight(x, z, (short)height);
             var surfaceKind = height < WaterLevelY
                 ? TileKind.Water
@@ -163,12 +150,11 @@ public static class WorldGen
             surfaceTiles++;
         }
 
-        // Per-tile corner derivation. SW corner is always the tile's own
-        // column. SE/NE/NW sample the east / NE-diagonal / north neighbor
-        // columns, but clamp to own if the gap exceeds CliffDelta. Neighbor-
-        // matching corners blend smoothly wherever terrain is gradual; big
-        // gaps force the corner flat at own Y, creating a discontinuity the
-        // mesher auto-walls.
+        // Per-tile corner derivation. SW = own column. SE / NE / NW sample the
+        // east / NE-diagonal / north neighbors but clamp back to own when the
+        // gap exceeds CliffDelta — producing the discontinuity the mesher
+        // auto-walls. Tier quantization above guarantees most within-tier
+        // neighbors land at identical heights so cliff boundaries are crisp.
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
@@ -199,5 +185,11 @@ public static class WorldGen
         return minProbe;
     }
 
-    private static float Smooth(float t) => t * t * (3f - 2f * t);
+    private static float Smoothstep(float edge0, float edge1, float x)
+    {
+        var t = Math.Clamp((x - edge0) / (edge1 - edge0), 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
+
+    private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 }

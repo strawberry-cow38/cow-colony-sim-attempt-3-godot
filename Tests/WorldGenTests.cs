@@ -56,10 +56,13 @@ public class WorldGenTests
     }
 
     [Fact]
-    public void Generate_Is_Seamless_Across_Cell_Borders()
+    public void Generate_Step_Bounded_By_Tier_And_Detail()
     {
-        // Big enough to span several cells; cell borders are at
-        // x = cellHalf + k*cellSize = 128 + 256k relative to world center.
+        // The largest legitimate per-tile jump is one tier (TierStep = 6)
+        // plus detail swing on each side (2 * 1.3 = 2.6), which rounds up
+        // to 9. 12 covers it with margin; anything larger would mean the
+        // noise stack is producing unbounded gradients instead of clean
+        // quantized plateaus.
         var world = new TileWorld();
         WorldGen.Generate(world, seed: 1111, sizeX: 768, sizeZ: 64);
 
@@ -72,20 +75,17 @@ public class WorldGenTests
             var step = Math.Abs(a - b);
             if (step > maxStep) maxStep = step;
         }
-        // Bilerp of 4 continuous features — step between adjacent tiles must
-        // stay small. A hard cell-border seam would produce >> PlateauStep.
-        // Mountain plateau terrace allows a single 10-tile band jump at ramp
-        // edges; cubby gradients may add a few tiles on top. 20 covers the
-        // combined case but still catches any actual cell-border seam.
-        Assert.True(maxStep <= 20, $"max per-tile step {maxStep} > 20");
+        Assert.True(maxStep <= 12, $"max per-tile step {maxStep} > 12");
     }
 
     [Fact]
-    public void FeatureResolver_Is_Deterministic()
+    public void NoiseStack_Is_Deterministic()
     {
-        var a = FeatureResolver.Pick(42, new CellKey(3, -2));
-        var b = FeatureResolver.Pick(42, new CellKey(3, -2));
-        Assert.Equal(a, b);
+        var a = new NoiseStack(42);
+        var b = new NoiseStack(42);
+        Assert.Equal(a.Continent.GetNoise(3f, -2f), b.Continent.GetNoise(3f, -2f));
+        Assert.Equal(a.Ridge.GetNoise(10f, 5f),    b.Ridge.GetNoise(10f, 5f));
+        Assert.Equal(a.Lake.GetNoise(-7f, 0f),     b.Lake.GetNoise(-7f, 0f));
     }
 
     [Fact]
