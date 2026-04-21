@@ -26,6 +26,7 @@ public static class TileAtlas
     private static readonly int[] GrassCells = { 0, 1, 2, 3, 4, 5, 6 };
     private const int DirtCell = 10;
     private const int RockCell = 13;
+    private const int SandCell = 15;
 
     public static int CellForTop(TileKind kind, int wx, int wz)
     {
@@ -33,6 +34,7 @@ public static class TileAtlas
         {
             TileKind.Floor => GrassCells[Hash(wx, wz) % GrassCells.Length],
             TileKind.Solid => DirtCell,
+            TileKind.Water => SandCell,
             _ => DirtCell,
         };
     }
@@ -43,9 +45,19 @@ public static class TileAtlas
         {
             TileKind.Floor => DirtCell,
             TileKind.Solid => RockCell,
+            TileKind.Water => SandCell,
             _ => DirtCell,
         };
     }
+
+    // Vertex-color tint multiplied with the albedo texture (material has
+    // vertex_color_use_as_albedo=true). Used to re-color shared atlas cells
+    // per TileKind without baking extra cells — Water picks up sand+blue.
+    public static Color TintFor(TileKind kind) => kind switch
+    {
+        TileKind.Water => new Color(0.35f, 0.55f, 0.78f, 0.80f),
+        _ => Colors.White,
+    };
 
     public static (float u0, float v0, float u1, float v1) CellUV(int cell)
     {

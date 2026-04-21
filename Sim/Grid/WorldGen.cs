@@ -24,6 +24,12 @@ public static class WorldGen
     private const float CubbyBlendBand = 0.15f;
     private const float CubbyDepthTiles = 6f;
 
+    // Water level in tile coordinates. Columns whose surface y < WaterLevelY
+    // get Water tiles stacked on top up to (WaterLevelY - 1). Lake cells
+    // (height range 1..2.5) fully submerge; plains floor (y=2) is dry;
+    // ragged shoreline comes from the bilerp between lake + neighbor cells.
+    public const int WaterLevelY = 3;
+
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
         float frequency = DefaultFrequency)
@@ -103,6 +109,7 @@ public static class WorldGen
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
+        var water = new Tile(TileKind.Water);
         var surfaceTiles = 0;
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
@@ -115,6 +122,12 @@ public static class WorldGen
                 tiles.Set(new TilePos(x, y, z), solid);
             }
             tiles.Set(new TilePos(x, height - 1, z), grass);
+            // Flood-fill water column for any ground-top below water level.
+            // Lake cells sink well below WaterLevelY; plains stay dry.
+            for (var y = height; y < WaterLevelY; y++)
+            {
+                tiles.Set(new TilePos(x, y, z), water);
+            }
             surfaceTiles++;
         }
         return surfaceTiles;

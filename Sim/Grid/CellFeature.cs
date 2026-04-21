@@ -48,7 +48,9 @@ public sealed class FeatureNoises
 
     public FeatureNoises(int seed)
     {
-        Plains    = Make(seed + 1, 0.020f, 2);
+        // Low freq + low amp = broad, slow rollers; reads as "open pasture".
+        // High-freq plains read as bumpy chop — bad for building / traversal.
+        Plains    = Make(seed + 1, 0.006f, 2);
         Hills     = Make(seed + 2, 0.010f, 4);
         Mountains = Make(seed + 3, 0.003f, 5);
         Lake      = Make(seed + 4, 0.030f, 2);
@@ -75,7 +77,7 @@ public sealed class FeatureNoises
         switch (f)
         {
             case CellFeature.Plains:
-                return 3f + (Plains.GetNoise(x, z) + 1f) * 0.5f * 7f;
+                return 3f + (Plains.GetNoise(x, z) + 1f) * 0.5f * 5f;
             case CellFeature.Hills:
                 return 4f + (Hills.GetNoise(x, z) + 1f) * 0.5f * 36f;
             case CellFeature.Mountains:

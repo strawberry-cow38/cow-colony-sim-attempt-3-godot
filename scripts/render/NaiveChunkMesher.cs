@@ -346,7 +346,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 if (!neighborEmpty) continue;
 
                 var cell = n.Y > 0.5f ? topCell : sideCell;
-                EmitFace(verts, normals, colors, uvs, indices, ox, oy, oz, tw, th, n, Colors.White, cell);
+                EmitFace(verts, normals, colors, uvs, indices, ox, oy, oz, tw, th, n, TileAtlas.TintFor(tile.Kind), cell);
             }
         }
 
@@ -469,6 +469,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
 
             var topCell = TileAtlas.CellForTop(kind, baseWx + lx, baseWz + lz);
             var (u0, v0, u1, v1) = TileAtlas.CellUV(topCell);
+            var tint = TileAtlas.TintFor(kind);
 
             var baseIndex = verts.Count;
             verts.Add(new Vector3(ox,         oyTop, oz));
@@ -479,7 +480,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
             uvs.Add(new Vector2(u1, v0));
             uvs.Add(new Vector2(u1, v1));
             uvs.Add(new Vector2(u0, v1));
-            for (var k = 0; k < 4; k++) { normals.Add(up); colors.Add(Godot.Colors.White); }
+            for (var k = 0; k < 4; k++) { normals.Add(up); colors.Add(tint); }
             indices.Add(baseIndex); indices.Add(baseIndex + 1); indices.Add(baseIndex + 2);
             indices.Add(baseIndex); indices.Add(baseIndex + 2); indices.Add(baseIndex + 3);
         }
@@ -555,6 +556,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
 
                 var sideCell = TileAtlas.CellForSide(kind);
                 var (u0, v0, u1, v1) = TileAtlas.CellUV(sideCell);
+                var tint = TileAtlas.TintFor(kind);
 
                 Vector3 p0, p1, p2, p3;
                 Vector3 normal;
@@ -594,8 +596,8 @@ public sealed class NaiveChunkMesher : IChunkMesher
                 var baseIndex = verts.Count;
                 verts.Add(p0); verts.Add(p1); verts.Add(p2); verts.Add(p3);
                 normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
-                colors.Add(Godot.Colors.White); colors.Add(Godot.Colors.White);
-                colors.Add(Godot.Colors.White); colors.Add(Godot.Colors.White);
+                colors.Add(tint); colors.Add(tint);
+                colors.Add(tint); colors.Add(tint);
                 uvs.Add(new Vector2(u0, v1));
                 uvs.Add(new Vector2(u1, v1));
                 uvs.Add(new Vector2(u1, v0));
