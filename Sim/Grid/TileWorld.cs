@@ -88,6 +88,20 @@ public sealed class TileWorld
 
     public bool CellHasChunks(CellKey key) => _chunksByCell.ContainsKey(key);
 
+    /// <summary>
+    /// Wipe every chunk, cell list, and per-chunk/per-cell tier. For the
+    /// "regenerate world" path — the caller then reruns WorldGen on the
+    /// empty TileWorld.
+    /// </summary>
+    public void Clear()
+    {
+        _chunks.Clear();
+        _chunkStates.Clear();
+        _cellStates.Clear();
+        _chunksByCell.Clear();
+        MutationTick++;
+    }
+
     public IEnumerable<CellKey> InMemoryCells => _chunksByCell.Keys;
 
     public Tile Get(TilePos pos)

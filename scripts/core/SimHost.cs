@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Godot;
 using fennecs;
@@ -17,6 +18,10 @@ public partial class SimHost : Node
 	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 
+	/// <summary>Emitted after Regenerate(seed) rebuilds the world. Renderers
+	/// that cache per-chunk mesh state key off this to drop stale slots.</summary>
+	[Signal] public delegate void WorldRegeneratedEventHandler();
+
 	public World World { get; } = new();
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
@@ -24,6 +29,7 @@ public partial class SimHost : Node
 	public CellStore CellStore { get; }
 	public CellPagingSystem Paging { get; }
 
+	public int CurrentSeed { get; private set; } = WorldSeed;
 	private readonly Random _rng = new(WorldSeed);
 
 	public SimHost()
@@ -43,6 +49,23 @@ public partial class SimHost : Node
 		ChunkTierSystem.Step(World, Tiles);
 		TimeOfDay.SetTicks((long)(SimConstants.TicksPerDay * 0.30f));
 		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}, cellsDir={CellStore.PathFor(new CellKey(0, 0))}.");
+	}
+
+	public void Regenerate(int seed)
+	{
+		CurrentSeed = seed;
+		DespawnAllEntities();
+		Tiles.Clear();
+		// Wipe any paged-out cells on disk — they're stale against the new
+		// seed. Caller owns the disk lifecycle via CellStore.
+		var cellsDir = Path.Combine(OS.GetUserDataDir(), "cells");
+		WipeDir(cellsDir);
+		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize);
+		SeedColonyClaim();
+		SeedColonists();
+		ChunkTierSystem.Step(World, Tiles);
+		EmitSignal(SignalName.WorldRegenerated);
+		GD.Print($"SimHost regenerated. seed={seed}, chunks={Tiles.ChunkCount}.");
 	}
 
 	public override void _Process(double delta)
@@ -74,6 +97,19 @@ public partial class SimHost : Node
 		Profiler.End("Paging");
 		Profiler.End("Sim tick");
 		Profiler.IncRate("Sim ticks/s");
+	}
+
+	private void DespawnAllEntities()
+	{
+		// Walk every known component marker, collect matching entities, then
+		// despawn outside the Stream to avoid mutating during iteration. Every
+		// entity in this codebase carries at least one of these, so the
+		// distinct union covers the full live set.
+		var toKill = new HashSet<Entity>();
+		World.Stream<ClaimedRegion>().For((in Entity e, ref ClaimedRegion _) => toKill.Add(e));
+		World.Stream<LiveAnchor>().For((in Entity e, ref LiveAnchor _) => toKill.Add(e));
+		World.Stream<Colonist>().For((in Entity e, ref Colonist _) => toKill.Add(e));
+		foreach (var e in toKill) e.Despawn();
 	}
 
 	private static void WipeDir(string dir)

@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://b0cowcolsimmain"]
+[gd_scene load_steps=11 format=3 uid="uid://b0cowcolsimmain"]
 
 [ext_resource type="Script" path="res://scripts/core/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://scripts/render/GridRenderer.cs" id="2_grid"]
@@ -9,6 +9,7 @@
 [ext_resource type="Script" path="res://scripts/ui/FpsCounter.cs" id="7_fps"]
 [ext_resource type="Script" path="res://scripts/ui/ProfilerHud.cs" id="8_profiler"]
 [ext_resource type="Script" path="res://scripts/ui/TileInfoHud.cs" id="9_tileinfo"]
+[ext_resource type="Script" path="res://scripts/ui/RegenerateButton.cs" id="10_regen"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -48,3 +49,6 @@ script = ExtResource("8_profiler")
 
 [node name="TileInfoHud" type="CanvasLayer" parent="."]
 script = ExtResource("9_tileinfo")
+
+[node name="RegenerateButton" type="CanvasLayer" parent="."]
+script = ExtResource("10_regen")

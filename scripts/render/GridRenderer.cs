@@ -62,6 +62,7 @@ public sealed partial class GridRenderer : Node3D
     public override void _Ready()
     {
         _simHost = GetNode<SimHost>("/root/SimHost");
+        _simHost.WorldRegenerated += OnWorldRegenerated;
         _grassTex = GD.Load<Texture2D>("res://textures/grass-atlas.jpg");
         _material = new StandardMaterial3D
         {
@@ -783,6 +784,26 @@ public sealed partial class GridRenderer : Node3D
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
         return mesh;
+    }
+
+    private void OnWorldRegenerated()
+    {
+        // Free every live slot. A regenerated world reuses the same chunk
+        // keys but with fresh Chunk objects (Revision resets to 0), so the
+        // slot's UploadedRevision comparison would otherwise wrongly report
+        // "up to date" and the renderer would keep displaying stale meshes.
+        foreach (var kv in _slots) kv.Value.MeshInstance.QueueFree();
+        foreach (var kv in _g4Slots) kv.Value.MeshInstance.QueueFree();
+        foreach (var kv in _g8Slots) kv.Value.MeshInstance.QueueFree();
+        _slots.Clear();
+        _g4Slots.Clear();
+        _g8Slots.Clear();
+        // Drop the Classify cache so the next frame re-scans the new chunk set.
+        _cacheCamChunkX = int.MinValue;
+        _cacheChunkCount = -1;
+        _cachePerChunkTier = null;
+        _cacheG4Masks = null;
+        _cacheG8Masks = null;
     }
 
     private sealed class ChunkRenderSlot
