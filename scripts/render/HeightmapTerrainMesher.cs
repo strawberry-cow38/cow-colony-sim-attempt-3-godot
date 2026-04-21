@@ -184,12 +184,13 @@ public sealed class HeightmapTerrainMesher
         }
         else if ((selfLowerA || selfLowerB) && !(selfUpperA || selfUpperB))
         {
-            // Neighbor is the upper tile → wall faces -faceDirPlus.
-            // The top of the wall is the neighbor's corners (our "bot" param
-            // which is actually higher here); bottom is our own edge (our
-            // "top" param). Swap and flip normal.
+            // Neighbor is the upper tile → wall faces -faceDirPlus. Reverse
+            // the perimeter order (B side before A) so CCW winding flips to
+            // match the flipped normal — otherwise back-face culling hides
+            // the outward face. Top = neighbor corners (our "bot" params,
+            // which are higher here); bottom = our own edge ("top" params).
             EmitCliffQuad(verts, normals, colors, uvs, indices,
-                bl: topA, tl: botA, tr: botB, br: topB,
+                bl: topB, tl: botB, tr: botA, br: topA,
                 normal: -faceDirPlus, kind);
         }
         // else: either flat (no gap) or a twisted corner (one side self-upper,
