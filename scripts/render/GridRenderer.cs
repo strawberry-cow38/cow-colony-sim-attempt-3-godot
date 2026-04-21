@@ -10,7 +10,9 @@ namespace CowColonySim.Render;
 
 public sealed partial class GridRenderer : Node3D
 {
-    // Chebyshev chunk-distance cutoffs for LOD selection.
+    // Euclidean (cylinder) chunk-distance cutoffs for LOD selection. Switching
+    // from chebyshev (square) to euclidean (circle) drops the four corner
+    // triangles of each ring — roughly 21% fewer chunks considered at any tier.
     private const int Tier0Range = 2;    // L0: per-chunk voxel
     private const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
     private const int Tier3Range = 16;   // L3: G4 group (4x4 chunks) heightmap step=4
@@ -132,6 +134,11 @@ public sealed partial class GridRenderer : Node3D
             var camCellX = FloorDiv(camChunkX, Cell.SizeChunks);
             var camCellZ = FloorDiv(camChunkZ, Cell.SizeChunks);
             var cellRange = (MaxChunkDistance + Cell.SizeChunks - 1) / Cell.SizeChunks;
+            long maxDistSq = (long)MaxChunkDistance * MaxChunkDistance;
+            long tier0Sq = (long)Tier0Range * Tier0Range;
+            long tier1Sq = (long)Tier1Range * Tier1Range;
+            long tier3Sq = (long)Tier3Range * Tier3Range;
+            long tier4Sq = (long)Tier4Range * Tier4Range;
             for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
             for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
             {
@@ -140,22 +147,22 @@ public sealed partial class GridRenderer : Node3D
                 for (var i = 0; i < chunks.Count; i++)
                 {
                     var ck = chunks[i];
-                    var dx = System.Math.Abs(ck.X - camChunkX);
-                    var dz = System.Math.Abs(ck.Z - camChunkZ);
-                    var d = System.Math.Max(dx, dz);
-                    if (d > MaxChunkDistance) continue;
+                    long dx = ck.X - camChunkX;
+                    long dz = ck.Z - camChunkZ;
+                    long dSq = dx * dx + dz * dz;
+                    if (dSq > maxDistSq) continue;
 
                     var g4Key  = GroupKey(ck, Group4);
                     var g8Key  = GroupKey(ck, Group8);
                     var g16Key = GroupKey(ck, Group16);
-                    var g4d  = GroupMinChebyshev(g4Key,  Group4,  camChunkX, camChunkZ);
-                    var g8d  = GroupMinChebyshev(g8Key,  Group8,  camChunkX, camChunkZ);
-                    var g16d = GroupMinChebyshev(g16Key, Group16, camChunkX, camChunkZ);
+                    long g4Sq  = GroupMinDistSq(g4Key,  Group4,  camChunkX, camChunkZ);
+                    long g8Sq  = GroupMinDistSq(g8Key,  Group8,  camChunkX, camChunkZ);
+                    long g16Sq = GroupMinDistSq(g16Key, Group16, camChunkX, camChunkZ);
 
-                    if (g16d > Tier4Range)        AddToBucket(g16Masks, g16Key, ck);
-                    else if (g8d  > Tier3Range)   AddToBucket(g8Masks,  g8Key,  ck);
-                    else if (g4d  > Tier1Range)   AddToBucket(g4Masks,  g4Key,  ck);
-                    else                          perChunkTier[ck] = d <= Tier0Range ? 0 : 1;
+                    if (g16Sq > tier4Sq)      AddToBucket(g16Masks, g16Key, ck);
+                    else if (g8Sq > tier3Sq)  AddToBucket(g8Masks,  g8Key,  ck);
+                    else if (g4Sq > tier1Sq)  AddToBucket(g4Masks,  g4Key,  ck);
+                    else                      perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
                 }
             }
 
@@ -511,15 +518,17 @@ public sealed partial class GridRenderer : Node3D
         return new TilePos(FloorDiv(chunkKey.X, groupSize) * groupSize, 0, FloorDiv(chunkKey.Z, groupSize) * groupSize);
     }
 
-    private static int GroupMinChebyshev(TilePos groupKey, int size, int camX, int camZ)
+    // Min euclidean-squared distance (chunks²) from camera to the group's AABB
+    // in the XZ plane. Zero if the camera is inside the group footprint.
+    private static long GroupMinDistSq(TilePos groupKey, int size, int camX, int camZ)
     {
         var xMin = groupKey.X;
         var xMax = groupKey.X + size - 1;
         var zMin = groupKey.Z;
         var zMax = groupKey.Z + size - 1;
-        var dx = System.Math.Max(0, System.Math.Max(camX - xMax, xMin - camX));
-        var dz = System.Math.Max(0, System.Math.Max(camZ - zMax, zMin - camZ));
-        return System.Math.Max(dx, dz);
+        long dx = System.Math.Max(0, System.Math.Max(camX - xMax, xMin - camX));
+        long dz = System.Math.Max(0, System.Math.Max(camZ - zMax, zMin - camZ));
+        return dx * dx + dz * dz;
     }
 
     private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);
