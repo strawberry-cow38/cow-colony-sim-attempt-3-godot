@@ -84,6 +84,9 @@ public sealed partial class GridRenderer : Node3D
     {
         if (_simHost == null) return;
 
+        _frameDispatchChunk = 0;
+        _frameDispatchGroup = 0;
+
         Profiler.Begin("Drain");
         DrainCompleted();
         Profiler.End("Drain");
@@ -212,9 +215,21 @@ public sealed partial class GridRenderer : Node3D
         return n;
     }
 
+    // Per-frame budgets. During a big pan hundreds of chunks can complete in
+    // a single frame; draining them all stalls the main thread on
+    // AssembleArrayMesh + heightmap texture upload. Keep the budget tight so
+    // the pan stays smooth — leftover work surfaces next frame.
+    private const int DrainChunkBudget = 4;
+    private const int DrainGroupBudget = 2;
+    private const int DispatchChunkBudget = 4;
+    private const int DispatchGroupBudget = 2;
+    private int _frameDispatchChunk;
+    private int _frameDispatchGroup;
+
     private void DrainCompleted()
     {
-        while (_completedChunk.TryDequeue(out var pack))
+        var drained = 0;
+        while (drained < DrainChunkBudget && _completedChunk.TryDequeue(out var pack))
         {
             var (key, result, lod) = pack;
             if (!_slots.TryGetValue(key, out var slot)) continue;
@@ -223,8 +238,10 @@ public sealed partial class GridRenderer : Node3D
             slot.UploadedRevision = slot.RequestedRevision;
             slot.CurrentLod = result?.LodLevel ?? lod;
             Profiler.IncRate(lod == 0 ? "L0 up/s" : "L1 up/s");
+            drained++;
         }
-        while (_completedGroup.TryDequeue(out var pack))
+        drained = 0;
+        while (drained < DrainGroupBudget && _completedGroup.TryDequeue(out var pack))
         {
             var (key, groupSize, result, lod, maskHash) = pack;
             var table = groupSize == Group4 ? _g4Slots : _g8Slots;
@@ -235,8 +252,10 @@ public sealed partial class GridRenderer : Node3D
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = result?.LodLevel ?? lod;
             Profiler.IncRate(groupSize == Group4 ? "G4 up/s" : "G8 up/s");
+            drained++;
         }
-        while (_completedGpuGroup.TryDequeue(out var pack))
+        drained = 0;
+        while (drained < DrainGroupBudget && _completedGpuGroup.TryDequeue(out var pack))
         {
             var (key, groupSize, patch, lod, maskHash) = pack;
             var table = groupSize == Group4 ? _g4Slots : _g8Slots;
@@ -257,6 +276,7 @@ public sealed partial class GridRenderer : Node3D
             slot.UploadedMaskHash = maskHash;
             slot.CurrentLod = patch?.LodLevel ?? lod;
             Profiler.IncRate(groupSize == Group4 ? "G4gpu up/s" : "G8gpu up/s");
+            drained++;
         }
     }
 
@@ -270,12 +290,13 @@ public sealed partial class GridRenderer : Node3D
             if (chunk == null) continue;
             if (!_slots.TryGetValue(chunkKey, out var slot))
             {
-                slot = new ChunkRenderSlot { MeshInstance = BuildInstance(chunkKey), CurrentLod = -1 };
+                slot = new ChunkRenderSlot { MeshInstance = BuildInstance(chunkKey, tier), CurrentLod = -1 };
                 AddChild(slot.MeshInstance);
                 _slots[chunkKey] = slot;
             }
             slot.MeshInstance.Visible = true;
             if (slot.InFlight) continue;
+            if (_frameDispatchChunk >= DispatchChunkBudget) continue;
 
             var nPosX = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X + 1, chunkKey.Y, chunkKey.Z));
             var nNegX = _simHost!.Tiles.GetChunkOrNull(new TilePos(chunkKey.X - 1, chunkKey.Y, chunkKey.Z));
@@ -304,6 +325,7 @@ public sealed partial class GridRenderer : Node3D
             ChunkSnapshot? snapNegY = nNegY?.Snapshot();
             slot.InFlight = true;
             slot.RequestedRevision = combinedRev;
+            _frameDispatchChunk++;
             var key = chunkKey;
             var lod = tier;
             Task.Run(() =>
@@ -336,7 +358,7 @@ public sealed partial class GridRenderer : Node3D
         {
             if (!table.TryGetValue(groupKey, out var slot))
             {
-                slot = new GroupRenderSlot { MeshInstance = BuildInstance(groupKey), CurrentLod = -1 };
+                slot = new GroupRenderSlot { MeshInstance = BuildInstance(groupKey, lod), CurrentLod = -1 };
                 AddChild(slot.MeshInstance);
                 table[groupKey] = slot;
             }
@@ -358,6 +380,7 @@ public sealed partial class GridRenderer : Node3D
                 }
             }
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
+            if (_frameDispatchGroup >= DispatchGroupBudget) continue;
 
             var entries = new List<NaiveChunkMesher.GroupChunkEntry>(chunkKeys.Count);
             foreach (var ck in chunkKeys)
@@ -371,6 +394,7 @@ public sealed partial class GridRenderer : Node3D
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
+            _frameDispatchGroup++;
             var key = groupKey;
             var size = groupSize;
             var maskHashCaptured = maskHash;
@@ -404,7 +428,7 @@ public sealed partial class GridRenderer : Node3D
             {
                 slot = new GroupRenderSlot
                 {
-                    MeshInstance = BuildGpuInstance(groupKey, patchMesh),
+                    MeshInstance = BuildGpuInstance(groupKey, patchMesh, lod),
                     CurrentLod = -1,
                 };
                 AddChild(slot.MeshInstance);
@@ -415,6 +439,7 @@ public sealed partial class GridRenderer : Node3D
 
             long maskHash = 0;
             long revHash = 0;
+            var yLevels = new HashSet<int>();
             foreach (var ck in chunkKeys)
             {
                 var chunk = _simHost!.Tiles.GetChunkOrNull(ck);
@@ -426,8 +451,14 @@ public sealed partial class GridRenderer : Node3D
                     maskHash = maskHash * 31 + ((lx * groupSize + lz) * 1024 + ck.Y + 1);
                     revHash += chunk.Revision;
                 }
+                yLevels.Add(ck.Y);
             }
+            // Neighbor-border chunks feed border heights to the patch so group
+            // seams don't gap. Include them in maskHash/revHash so a neighbor
+            // edit retriggers this group's rebuild.
+            AccumulateBorderHash(yLevels, groupKey, groupSize, ref maskHash, ref revHash);
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash) continue;
+            if (_frameDispatchGroup >= DispatchGroupBudget) continue;
 
             var entries = new List<NaiveChunkMesher.GroupChunkEntry>(chunkKeys.Count);
             foreach (var ck in chunkKeys)
@@ -438,9 +469,11 @@ public sealed partial class GridRenderer : Node3D
                 var lz = ck.Z - groupKey.Z;
                 entries.Add(new NaiveChunkMesher.GroupChunkEntry(lx, lz, ck.Y, chunk.Snapshot()));
             }
+            AppendBorderEntries(entries, yLevels, groupKey, groupSize);
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
+            _frameDispatchGroup++;
             var key = groupKey;
             var size = groupSize;
             var maskHashCaptured = maskHash;
@@ -460,14 +493,96 @@ public sealed partial class GridRenderer : Node3D
         }
     }
 
-    private MeshInstance3D BuildGpuInstance(TilePos originChunkKey, ArrayMesh patchMesh)
+    // Iterate chunk keys at the +X, +Z, and corner border of a group, one per
+    // (lateral, Y) position, at the group's existing Y levels. Local coords
+    // use Lx/Lz = groupSize to signal the border to BuildGroupHeightmapPatch.
+    private void ForEachBorderChunk(HashSet<int> yLevels, TilePos groupKey, int groupSize,
+        System.Action<int, int, int, Chunk> visit)
     {
-        return new MeshInstance3D
+        for (var cz = 0; cz < groupSize; cz++)
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z + cz));
+            if (c != null) visit(groupSize, cz, y, c);
+        }
+        for (var cx = 0; cx < groupSize; cx++)
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + cx, y, groupKey.Z + groupSize));
+            if (c != null) visit(cx, groupSize, y, c);
+        }
+        foreach (var y in yLevels)
+        {
+            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z + groupSize));
+            if (c != null) visit(groupSize, groupSize, y, c);
+        }
+    }
+
+    private void AccumulateBorderHash(HashSet<int> yLevels, TilePos groupKey, int groupSize,
+        ref long maskHash, ref long revHash)
+    {
+        long mh = maskHash, rh = revHash;
+        ForEachBorderChunk(yLevels, groupKey, groupSize, (lx, lz, y, c) =>
+        {
+            unchecked
+            {
+                mh = mh * 31 + ((lx * (groupSize + 1) + lz) * 1024 + y + 1);
+                rh += c.Revision;
+            }
+        });
+        maskHash = mh; revHash = rh;
+    }
+
+    private void AppendBorderEntries(List<NaiveChunkMesher.GroupChunkEntry> entries,
+        HashSet<int> yLevels, TilePos groupKey, int groupSize)
+    {
+        ForEachBorderChunk(yLevels, groupKey, groupSize, (lx, lz, y, c) =>
+        {
+            entries.Add(new NaiveChunkMesher.GroupChunkEntry(lx, lz, y, c.Snapshot()));
+        });
+    }
+
+    private MeshInstance3D BuildGpuInstance(TilePos originChunkKey, ArrayMesh patchMesh, int lod)
+    {
+        var mi = new MeshInstance3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey),
             Mesh = patchMesh,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
+        ApplyLodFade(mi, lod);
+        return mi;
+    }
+
+    // Tier boundaries in meters (1 chunk = 24m): L1 ends at Tier1Range (6×24=144m),
+    // G4 ends at Tier3Range (16×24=384m). Each boundary gets a 1-chunk dither
+    // window so adjacent tiers overlap on screen — fade out on the near mesh
+    // is matched by fade in on the coarse mesh.
+    private static void ApplyLodFade(MeshInstance3D mi, int lod)
+    {
+        const float chunkM = Chunk.Size * TileCoord.TileW;
+        const float tier1m = Tier1Range * chunkM;
+        const float tier3m = Tier3Range * chunkM;
+        const float fadeMargin = chunkM;
+        mi.VisibilityRangeFadeMode = GeometryInstance3D.VisibilityRangeFadeModeEnum.Self;
+        switch (lod)
+        {
+            case 0:
+            case 1:
+                mi.VisibilityRangeEnd = tier1m;
+                mi.VisibilityRangeEndMargin = fadeMargin;
+                break;
+            case 3:
+                mi.VisibilityRangeBegin = tier1m - fadeMargin;
+                mi.VisibilityRangeBeginMargin = fadeMargin;
+                mi.VisibilityRangeEnd = tier3m;
+                mi.VisibilityRangeEndMargin = fadeMargin;
+                break;
+            case 4:
+                mi.VisibilityRangeBegin = tier3m - fadeMargin;
+                mi.VisibilityRangeBeginMargin = fadeMargin;
+                break;
+        }
     }
 
     private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap)
@@ -511,14 +626,16 @@ public sealed partial class GridRenderer : Node3D
         list.Add(chunkKey);
     }
 
-    private MeshInstance3D BuildInstance(TilePos originChunkKey)
+    private MeshInstance3D BuildInstance(TilePos originChunkKey, int lod)
     {
-        return new MeshInstance3D
+        var mi = new MeshInstance3D
         {
             Position = TileCoord.ChunkOrigin(originChunkKey),
             MaterialOverride = _material,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
+        ApplyLodFade(mi, lod);
+        return mi;
     }
 
     private static ArrayMesh AssembleArrayMesh(MeshBuildResult r)

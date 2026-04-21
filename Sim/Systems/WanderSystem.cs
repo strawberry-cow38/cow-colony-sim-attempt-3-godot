@@ -9,6 +9,10 @@ public static class WanderSystem
 {
     public const int WanderSearchRadius = 200;
     public const int MinDistanceFromStart = 3;
+    // At 60Hz: 90..240 ticks = ~1.5s..4s rest between wanders. Without this
+    // idle cows file a PathRequest every tick and Parallel.For never idles.
+    public const int CooldownMinTicks = 90;
+    public const int CooldownMaxTicks = 240;
 
     public static void Step(World world, TileWorld tiles, Random rng, long tick)
     {
@@ -16,10 +20,17 @@ public static class WanderSystem
         world.Stream<PathRequest>().For((in Entity e, ref PathRequest _) => withPath.Add(e));
         world.Stream<PathCurrent>().For((in Entity e, ref PathCurrent _) => withPath.Add(e));
 
+        var cooling = new HashSet<Entity>();
+        world.Stream<WanderCooldown>().For((in Entity e, ref WanderCooldown cd) =>
+        {
+            if (cd.NotBeforeTick > tick) cooling.Add(e);
+        });
+
         var toPlan = new List<(Entity Entity, Position Pos)>();
         world.Stream<Position, Colonist>().For((in Entity e, ref Position p, ref Colonist _) =>
         {
             if (withPath.Contains(e)) return;
+            if (cooling.Contains(e)) return;
             if (!CellGating.ShouldStepForTile(tiles, TileMath.TileAt(p), tick)) return;
             toPlan.Add((e, p));
         });
@@ -28,6 +39,9 @@ public static class WanderSystem
         {
             var start = TileMath.TileAt(pos);
             var target = PickRandomReachable(tiles, start, rng);
+            var next = tick + rng.Next(CooldownMinTicks, CooldownMaxTicks);
+            if (e.Has<WanderCooldown>()) e.Remove<WanderCooldown>();
+            e.Add(new WanderCooldown(next));
             if (target.HasValue) e.Add(new PathRequest(target.Value));
         }
     }

@@ -135,11 +135,18 @@ public sealed class NaiveChunkMesher : IChunkMesher
         }
 
         var th = TileCoord.TileH;
+        // cx/cz may reach groupChunks — those are border entries carrying the
+        // first tile column/row of the +X / +Z / corner neighbor group. They
+        // populate the last col/row of the heights array so stepped-patch
+        // walls at group seams have true neighbor height on the other side
+        // instead of a degenerate self-sample.
         foreach (var ((cx, cz), list) in byCol)
         {
             list.Sort((a, b) => b.ChunkY.CompareTo(a.ChunkY));
-            for (var lz = 0; lz < size; lz++)
-            for (var lx = 0; lx < size; lx++)
+            var lxMax = cx < groupChunks ? size : 1;
+            var lzMax = cz < groupChunks ? size : 1;
+            for (var lz = 0; lz < lzMax; lz++)
+            for (var lx = 0; lx < lxMax; lx++)
             {
                 var top = -1;
                 foreach (var ent in list)
@@ -162,9 +169,11 @@ public sealed class NaiveChunkMesher : IChunkMesher
 
         if (!any) return null;
 
-        // Replicate last col/row so bilinear sampling at uv=1 works.
-        for (var z = 0; z < sizeZ; z++) heights[sizeX, z] = heights[sizeX - 1, z];
-        for (var x = 0; x <= sizeX; x++) heights[x, sizeZ] = heights[x, sizeZ - 1];
+        // Fallback: if a border entry was missing (edge of world, cell not
+        // paged in), replicate own last col/row so sampling at uv=1 still
+        // clamps to a sane value rather than zero.
+        for (var z = 0; z < sizeZ; z++) if (heights[sizeX, z] == 0f) heights[sizeX, z] = heights[sizeX - 1, z];
+        for (var x = 0; x <= sizeX; x++) if (heights[x, sizeZ] == 0f) heights[x, sizeZ] = heights[x, sizeZ - 1];
 
         float maxH = 0f;
         for (var z = 0; z <= sizeZ; z++)

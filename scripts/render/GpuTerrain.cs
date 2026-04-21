@@ -56,10 +56,10 @@ public static class GpuTerrain
 
             // +X side: neighbor (cx+1, cz). Top verts sample ownUv, bottom verts
             // sample neighbor UV — when own > nbr the wall shows; otherwise the
-            // triangle flips and is backface-culled.
-            var nbrPxUv = cx + 1 < cellsPerSide
-                ? new Vector2((cx + 1.5f) * invN, (cz + 0.5f) * invN)
-                : ownUv;
+            // triangle flips and is backface-culled. At the group edge we sample
+            // past uv=1.0 so clamp_to_edge picks up the neighbor-group border
+            // sample BuildGroupHeightmapPatch wrote into heights[sizeX, *].
+            var nbrPxUv = new Vector2((cx + 1.5f) * invN, (cz + 0.5f) * invN);
             var wPx = vi;
             vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi++] = ownUv;
             vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi++] = ownUv;
@@ -80,10 +80,9 @@ public static class GpuTerrain
             indices[ii++] = wNx + 0; indices[ii++] = wNx + 2; indices[ii++] = wNx + 1;
             indices[ii++] = wNx + 1; indices[ii++] = wNx + 2; indices[ii++] = wNx + 3;
 
-            // +Z side: neighbor (cx, cz+1).
-            var nbrPzUv = cz + 1 < cellsPerSide
-                ? new Vector2((cx + 0.5f) * invN, (cz + 1.5f) * invN)
-                : ownUv;
+            // +Z side: neighbor (cx, cz+1). Edge sample clamps past uv=1.0 to
+            // heights[*, sizeZ] — the +Z neighbor group's border sample.
+            var nbrPzUv = new Vector2((cx + 0.5f) * invN, (cz + 1.5f) * invN);
             var wPz = vi;
             vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi++] = ownUv;
             vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi++] = ownUv;
