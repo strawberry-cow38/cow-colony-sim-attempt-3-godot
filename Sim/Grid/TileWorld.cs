@@ -228,12 +228,18 @@ public sealed class TileWorld
             {
                 snap.EastRim[lz, 0] = px.Corners[0, lz, TerrainChunk.SW];
                 snap.EastRim[lz, 1] = px.Corners[0, lz, TerrainChunk.NW];
+                snap.EastRimKind[lz]     = px.Kinds[0, lz];
+                snap.EastRimWaterTop[lz] = px.WaterTops[0, lz];
             }
             else
             {
                 // No neighbor: mirror own east-edge corners so no wall emits.
                 snap.EastRim[lz, 0] = tc.Corners[s - 1, lz, TerrainChunk.SE];
                 snap.EastRim[lz, 1] = tc.Corners[s - 1, lz, TerrainChunk.NE];
+                // Kind=Empty (0) so mesher skips any water-curtain check at
+                // the world edge — no spurious curtain at chunk borders.
+                snap.EastRimKind[lz]     = 0;
+                snap.EastRimWaterTop[lz] = 0;
             }
         }
         for (var lx = 0; lx < s; lx++)
@@ -242,11 +248,15 @@ public sealed class TileWorld
             {
                 snap.NorthRim[lx, 0] = pz.Corners[lx, 0, TerrainChunk.SW];
                 snap.NorthRim[lx, 1] = pz.Corners[lx, 0, TerrainChunk.SE];
+                snap.NorthRimKind[lx]     = pz.Kinds[lx, 0];
+                snap.NorthRimWaterTop[lx] = pz.WaterTops[lx, 0];
             }
             else
             {
                 snap.NorthRim[lx, 0] = tc.Corners[lx, s - 1, TerrainChunk.NW];
                 snap.NorthRim[lx, 1] = tc.Corners[lx, s - 1, TerrainChunk.NE];
+                snap.NorthRimKind[lx]     = 0;
+                snap.NorthRimWaterTop[lx] = 0;
             }
         }
         return snap;

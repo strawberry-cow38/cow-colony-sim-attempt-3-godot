@@ -41,6 +41,15 @@ public sealed class TerrainSnapshot
     // NorthRim[lx, 1] = neighbor SE.
     public readonly short[,] NorthRim = new short[Size, 2];
 
+    // Per-row neighbor kind + water-top at the east / north chunk seams, so
+    // the mesher can detect water↔water boundaries across chunk edges (for
+    // waterfall curtains). When no neighbor chunk exists, kind defaults to
+    // Empty (0) so no curtain emits at the world border.
+    public readonly byte[]  EastRimKind     = new byte[Size];
+    public readonly short[] EastRimWaterTop = new short[Size];
+    public readonly byte[]  NorthRimKind    = new byte[Size];
+    public readonly short[] NorthRimWaterTop = new short[Size];
+
     public readonly int Revision;
 
     public TerrainSnapshot(int cx, int cz, int revision)
