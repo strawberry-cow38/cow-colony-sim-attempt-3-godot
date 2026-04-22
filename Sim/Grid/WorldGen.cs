@@ -40,6 +40,16 @@ public static class WorldGen
     private const int   RiverMaxWalkSteps      = 4096;
     private const float RiverMeanderWeight     = 2.2f;
 
+    // Bank-smoothing pass. After carve, river beds sit below sea level with
+    // abrupt cliffs on their dry neighbors. A corridor of BankSmoothRadius
+    // cells around every sub-sea-level column is relaxed with an iterated
+    // 3×3 box average — but only in the lowering direction, so we can never
+    // push mountains or lake beds around. Heights above BankMaxBaseH are
+    // excluded entirely so mountain flanks near shorelines stay untouched.
+    private const int BankSmoothRadius     = 4;
+    private const int BankSmoothIterations = 3;
+    private const int BankMaxBaseH         = 10;
+
     // Detail noise amplitude. Low enough that plains and hills read as
     // gently rolling rather than jagged.
     private const float DetailAmplitude = 1.3f;
@@ -149,6 +159,7 @@ public static class WorldGen
             isLake[xi, zi] = heights[xi, zi] < WaterLevelY;
 
         _ = CarveRivers(heights, isLake, noise, sizeX, sizeZ, halfX, halfZ, minHeight);
+        SmoothRiverBanks(heights, sizeX, sizeZ);
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
@@ -335,6 +346,50 @@ public static class WorldGen
             }
         }
         return flow;
+    }
+
+    private static void SmoothRiverBanks(int[,] heights, int sizeX, int sizeZ)
+    {
+        var isBank = new bool[sizeX, sizeZ];
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+        {
+            if (heights[xi, zi] >= WaterLevelY) continue;
+            var r = BankSmoothRadius;
+            var x0 = Math.Max(0, xi - r);
+            var x1 = Math.Min(sizeX - 1, xi + r);
+            var z0 = Math.Max(0, zi - r);
+            var z1 = Math.Min(sizeZ - 1, zi + r);
+            for (var nx = x0; nx <= x1; nx++)
+            for (var nz = z0; nz <= z1; nz++)
+                isBank[nx, nz] = true;
+        }
+
+        var buf = new int[sizeX, sizeZ];
+        for (var pass = 0; pass < BankSmoothIterations; pass++)
+        {
+            Array.Copy(heights, buf, heights.Length);
+            for (var xi = 0; xi < sizeX; xi++)
+            for (var zi = 0; zi < sizeZ; zi++)
+            {
+                if (!isBank[xi, zi]) continue;
+                if (heights[xi, zi] > BankMaxBaseH) continue;
+
+                var sum = 0;
+                var cnt = 0;
+                for (var dz = -1; dz <= 1; dz++)
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    var nxi = xi + dx;
+                    var nzi = zi + dz;
+                    if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                    sum += buf[nxi, nzi];
+                    cnt++;
+                }
+                var avg = sum / cnt;
+                if (avg < heights[xi, zi]) heights[xi, zi] = avg;
+            }
+        }
     }
 
     // Shore-aware clamp. Use the neighbor's height directly so land-land and
