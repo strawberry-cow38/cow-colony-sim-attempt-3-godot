@@ -12,8 +12,8 @@ public partial class BenchHarness : Node
 {
     private const double WarmupSec = 3.0;
     private const double SampleSec = 20.0;
-    private const int StressCowCount = 500;
-    private const int StressSpawnRadius = 80;
+    private const int StressCowCount = 5000;
+    private const int StressSpawnRadius = 200;
 
     private bool _enabled;
     private bool _stress;
