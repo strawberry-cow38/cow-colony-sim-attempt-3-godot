@@ -45,15 +45,12 @@ public static class WorldGen
     // steps plus this slack for chebyshev/diagonal moves and meander.
     private const int   RiverWalkSlack         = 64;
 
-    // Bank-lowering pass. Instead of box-smoothing, every sub-sea-level
-    // cell (river bed + lake bed + ocean coast) projects a distance-based
-    // ramp outward: at Chebyshev distance d the ceiling is
-    // `bed + round(d * BankRampSlope)`, so neighbors higher than that get
-    // pulled down. Produces a gentle inverted-cone bowl around each water
-    // cell. A slope of 0.5 yields ~6-tile vertical rise over a 12-tile
-    // horizontal corridor — soft banks, no hard cliffs touching water.
-    private const int   BankRampRadius         = 12;
-    private const float BankRampSlope          = 0.5f;
+    // Bank-lowering pass. Iterative single-step dilation: every cell must
+    // sit at most one tile above its lowest 8-neighbor. Sub-sea cells
+    // (river beds, lake beds, coast-fade rim) act as implicit seeds — the
+    // dilation pulls inland heights down along a pyramid of slope 1 tile
+    // per tile until the ramp reaches ambient terrain and the sweep
+    // terminates. Guarantees no cliff-jump at bank edges.
 
     // Detail noise amplitude. Low enough that plains and hills read as
     // gently rolling rather than jagged.
@@ -157,7 +154,7 @@ public static class WorldGen
         });
 
         CarveRivers(heights, noise, seed, sizeX, sizeZ, halfX, halfZ, minHeight);
-        LowerBanks(heights, sizeX, sizeZ, coastRadius);
+        LowerBanks(heights, sizeX, sizeZ);
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
@@ -332,31 +329,42 @@ public static class WorldGen
         }
     }
 
-    // Distance-ramp pass. Every inland sub-sea-level cell projects a
-    // Chebyshev ramp of slope BankRampSlope out to BankRampRadius —
-    // neighbors higher than the ramp ceiling get lowered. Rivers + lakes
-    // both use the same projection. Ocean-coast cells are skipped as
-    // sources because the coastal smoothstep fade already handles shore
-    // slope; projecting further from them would flatten a second ring.
-    private static void LowerBanks(int[,] heights, int sizeX, int sizeZ, int coastRadius)
+    // Iterative single-step dilation. After each pass every cell sits at
+    // most one tile above its lowest 8-neighbor; repeat until the heightmap
+    // stabilizes. Sub-sea-level cells (river beds, lake beds, coast rim)
+    // seed the dilation implicitly — they're already lower than their
+    // neighbors, so the sweep pulls inland terrain down in a pyramid of
+    // slope 1 until it meets ambient and terminates. Guarantees no
+    // single-tile cliff jumps > 1 between any bank cell and its neighbor.
+    private static void LowerBanks(int[,] heights, int sizeX, int sizeZ)
     {
-        for (var xi = 0; xi < sizeX; xi++)
-        for (var zi = 0; zi < sizeZ; zi++)
+        var changed = true;
+        var maxPasses = 256;
+        for (var pass = 0; pass < maxPasses && changed; pass++)
         {
-            var bedH = heights[xi, zi];
-            if (bedH >= WaterLevelY) continue;
-            var edgeDist = Math.Min(Math.Min(xi, sizeX - 1 - xi),
-                                    Math.Min(zi, sizeZ - 1 - zi));
-            if (edgeDist < coastRadius) continue;
-
-            for (var dz = -BankRampRadius; dz <= BankRampRadius; dz++)
-            for (var dx = -BankRampRadius; dx <= BankRampRadius; dx++)
+            changed = false;
+            for (var xi = 0; xi < sizeX; xi++)
+            for (var zi = 0; zi < sizeZ; zi++)
             {
-                var nxi = xi + dx; var nzi = zi + dz;
-                if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
-                var d = Math.Max(Math.Abs(dx), Math.Abs(dz));
-                var target = bedH + (int)MathF.Round(d * BankRampSlope);
-                if (heights[nxi, nzi] > target) heights[nxi, nzi] = target;
+                var minN = int.MaxValue;
+                for (var dz = -1; dz <= 1; dz++)
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    if (dx == 0 && dz == 0) continue;
+                    var nxi = xi + dx; var nzi = zi + dz;
+                    if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                    if (heights[nxi, nzi] < minN) minN = heights[nxi, nzi];
+                }
+                if (minN == int.MaxValue) continue;
+                // Floor at water level so the dilation never drags dry
+                // cells below sea level — sub-sea beds stay local, the
+                // ramp always rises from the waterline upward.
+                var target = Math.Max(WaterLevelY, minN + 1);
+                if (heights[xi, zi] > target)
+                {
+                    heights[xi, zi] = target;
+                    changed = true;
+                }
             }
         }
     }
