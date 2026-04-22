@@ -145,16 +145,7 @@ public sealed class HeightmapTerrainMesher
                 faceDirPlus: new Vector3(0f, 0f, 1f),
                 topKind);
 
-            // Water plane covers any tile whose bed dips below sea level,
-            // not only kind=Water. Shore tiles classed as Sand often carry
-            // corners that sag below WaterLevelY where a lake's edge
-            // smoothstep pulls them down — without the overlay those pixels
-            // would punch a dry hole in the lake surface.
-            var anyCornerSubmerged = hSW < WorldGen.WaterLevelY
-                || hSE < WorldGen.WaterLevelY
-                || hNE < WorldGen.WaterLevelY
-                || hNW < WorldGen.WaterLevelY;
-            if (isWater || anyCornerSubmerged)
+            if (isWater)
             {
                 EmitWaterPlane(verts, normals, colors, uvs, indices,
                     x0, z0, x1, z1, wx, wz);

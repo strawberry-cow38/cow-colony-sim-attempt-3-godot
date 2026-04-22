@@ -93,7 +93,11 @@ public sealed partial class GridRenderer : Node3D
             VertexColorUseAsAlbedo = true,
             // Vertex alpha honored → translucent water plane over sand bed.
             // Land tiles tint with alpha=1 so they render fully opaque.
-            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
+            // DepthPrePass (not plain Alpha): sand triangles still write depth
+            // in the prepass so the translucent water quads sort correctly
+            // against them. Plain Alpha disables depth-write and sand/water
+            // draw in index order, causing water to leak through sloped sand.
+            Transparency = BaseMaterial3D.TransparencyEnum.AlphaDepthPrePass,
             Roughness = 0.95f,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
         };

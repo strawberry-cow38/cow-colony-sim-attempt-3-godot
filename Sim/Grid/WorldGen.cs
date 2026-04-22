@@ -17,21 +17,6 @@ public static class WorldGen
     private const float MountainOnset = 0.55f;
     private const float MountainFull  = 0.80f;
 
-    // Plateau quantization. Above this elevation, heights snap to tier
-    // multiples so adjacent tiles within one tier share a flat value. Cliff
-    // faces form along tier boundaries — long continuous contours instead
-    // of scattered per-tile spikes.
-    private const float QuantStart = 15f;
-    private const float TierStep   = 6f;  // > CliffDelta so one step = one clean cliff.
-
-    // Cliff mask. Mountains default to smooth (raw) terrain; only where the
-    // Ramp-noise layer rises above CliffOnset do heights snap to the
-    // quantized tier. High onset → rare cliff patches (~10% of mountain
-    // area). Low-frequency noise means each cliff patch spans several tiles
-    // of continuous tier boundary instead of scattered single-tile spikes.
-    private const float CliffOnset = 0.72f;
-    private const float CliffFull  = 0.85f;
-
     // Lake carve. Mask above onset pulls height below sea level; only fires
     // when base elevation is already low AND mountain mask is low so cliff
     // feet stay dry (no lakes touching mountain walls). Wide smoothstep
@@ -41,10 +26,8 @@ public static class WorldGen
     private const float LakeMaxBaseH = 8f;
     private const float LakeMountainBuffer = 0.30f;
 
-    // Detail noise amplitude. Strictly < CliffDelta so adjacent tiles never
-    // disagree by more than CliffDelta from detail alone — no spurious cliffs
-    // in plains / hills. Within a quantized tier this remains true because
-    // both tiles sit at the same quantized floor plus their own detail.
+    // Detail noise amplitude. Low enough that plains and hills read as
+    // gently rolling rather than jagged.
     private const float DetailAmplitude = 1.3f;
 
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
@@ -81,21 +64,11 @@ public static class WorldGen
                     baseH = Lerp(baseH, mountainH, mountainWeight);
                 }
 
-                // Plateau quantization only inside cliff patches. Default is
-                // the raw smooth baseH; where CliffMask rises above onset the
-                // value lerps toward the tier-quantized floor, producing a
-                // sparse collection of stepped plateaus on an otherwise
-                // smooth mountainside. Step size > CliffDelta so every tier
-                // boundary inside a patch yields exactly one clean cliff.
-                if (baseH > QuantStart)
-                {
-                    var over = baseH - QuantStart;
-                    var tier = MathF.Floor(over / TierStep) * TierStep;
-                    var quantized = QuantStart + tier;
-                    var cliffMaskRaw = (noise.Ramp.GetNoise(x, z) + 1f) * 0.5f;
-                    var cliffWeight = Smoothstep(CliffOnset, CliffFull, cliffMaskRaw);
-                    baseH = Lerp(baseH, quantized, cliffWeight);
-                }
+                // Mountains stay smooth — no plateau quantization. Cliffs
+                // only emerge along lake shorelines (where the lake carve
+                // drops a tile below sea level while its neighbor stays on
+                // land) via the Cap rule below. Ridge noise supplies all the
+                // peak/valley drama directly.
 
                 // Detail pass. Capped < CliffDelta so flat plains never spike.
                 // Muted on mountain plateaus (scaled by 1 - mountainWeight) so
@@ -203,8 +176,17 @@ public static class WorldGen
         return surfaceTiles;
     }
 
+    // Shore-aware clamp. Use the neighbor's height directly so land-land and
+    // lake-lake boundaries produce a shared corner — smooth mountains, no
+    // random mid-slope cliffs. Only clamp when the boundary crosses sea
+    // level (shore ↔ lakebed) so the waterline is a crisp cliff the mesher
+    // can pick up, while the rest of the terrain blends continuously.
     private static int Cap(int candidate, int own)
-        => Math.Abs(candidate - own) > SimConstants.CliffDelta ? own : candidate;
+    {
+        var ownDry = own >= WaterLevelY;
+        var candDry = candidate >= WaterLevelY;
+        return ownDry != candDry ? own : candidate;
+    }
 
     public static int SurfaceY(TileWorld tiles, int x, int z, int maxProbe = 128, int minProbe = -16)
     {

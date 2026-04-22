@@ -56,13 +56,13 @@ public class WorldGenTests
     }
 
     [Fact]
-    public void Generate_Step_Bounded_By_Tier_And_Detail()
+    public void Generate_Step_Bounded_By_Noise_Gradient()
     {
-        // The largest legitimate per-tile jump is one tier (TierStep = 6)
-        // plus detail swing on each side (2 * 1.3 = 2.6), which rounds up
-        // to 9. 12 covers it with margin; anything larger would mean the
-        // noise stack is producing unbounded gradients instead of clean
-        // quantized plateaus.
+        // Mountains are raw smooth (no plateau quantization); per-tile step
+        // is bounded by the ridge-noise gradient plus detail swing. 20 is a
+        // generous ceiling — anything above that signals the noise stack is
+        // producing unbounded spikes rather than a continuous surface. Lake
+        // shorelines sit just inside this bound (shore +few → bed -few).
         var world = new TileWorld();
         WorldGen.Generate(world, seed: 1111, sizeX: 768, sizeZ: 64);
 
@@ -75,7 +75,7 @@ public class WorldGenTests
             var step = Math.Abs(a - b);
             if (step > maxStep) maxStep = step;
         }
-        Assert.True(maxStep <= 12, $"max per-tile step {maxStep} > 12");
+        Assert.True(maxStep <= 20, $"max per-tile step {maxStep} > 20");
     }
 
     [Fact]
