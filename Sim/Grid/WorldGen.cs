@@ -14,11 +14,12 @@ public static class WorldGen
 
     // Mountain region onset. MountainMask noise above MountainOnset begins
     // ramping into ridge-shaped peaks; above MountainFull is fully
-    // mountainous. Smoothstep-blended. Raised 0.55/0.80 → 0.68/0.90 on
-    // 2026-04-22 to roughly halve mountain coverage — fewer and smaller
-    // mountainous regions, more open plains between them.
-    private const float MountainOnset = 0.68f;
-    private const float MountainFull  = 0.90f;
+    // mountainous. Smoothstep-blended. Raised 0.55/0.80 → 0.75/0.95 on
+    // 2026-04-22 so mountains are sparse isolated clusters rather than
+    // large swathes — both for aesthetics and to give the strict river
+    // walker room to find non-mountain corridors between coasts.
+    private const float MountainOnset = 0.75f;
+    private const float MountainFull  = 0.95f;
 
     // Lake carve. Mask above onset pulls height below sea level; only fires
     // when base elevation is already low AND mountain mask is low so cliff
@@ -303,7 +304,7 @@ public static class WorldGen
     // attempts per river — after that, the river is silently dropped
     // rather than forced into a crossing.
     private const float RiverWalkerMomentum = 1.25f;
-    private const int   RiverMaxAttempts    = 24;
+    private const int   RiverMaxAttempts    = 64;
     private static readonly float[] RiverHeadingRotations =
     {
         0f,
@@ -317,6 +318,10 @@ public static class WorldGen
         -1.396f,  1.396f,   // ±80°
         -1.571f,  1.571f,   // ±90°
         -1.745f,  1.745f,   // ±100°
+        -1.920f,  1.920f,   // ±110°
+        -2.094f,  2.094f,   // ±120°
+        -2.269f,  2.269f,   // ±130°
+        -2.443f,  2.443f,   // ±140°
     };
 
     private static List<RiverPath> PlanRivers(
