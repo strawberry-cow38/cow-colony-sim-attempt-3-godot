@@ -455,40 +455,49 @@ public static class WorldGen
     }
 
     // Continuous-walker heading pick. Returns a unit-length step vector
-    // landing in a legal cell, or null if no cell is reachable. Strict
-    // constraints — no fallback, no relaxation:
-    //   - not out of bounds
-    //   - not mountain (MountainMask < MountainOnset)
-    //   - not claimed by a prior river (used[,])
-    //   - not already part of this river's own path (selfCells)
-    // Staying in the walker's current cell is always legal since it's
-    // the walker's own starting cell for this step.
+    // landing in a legal cell, or null if the walker is fully boxed in
+    // by prior rivers (non-crossing is strict). Mountain cells are
+    // preferred-but-not-blocked: pass 0 requires non-mountain + non-
+    // crossing; pass 1 allows mountain but still rejects any cell
+    // claimed by a prior river or this river's own path. The heightmap
+    // river-proximity suppression (RiverMountainInner/Outer) zeroes the
+    // mountain contribution within 6 tiles of any river cell anyway, so
+    // a walker that slips through a mountain noise peak on pass 1 still
+    // ends up rendering as a plains corridor — but stays strictly out
+    // of another river's cells regardless.
     private static (float rx, float rz)? FindHeadingStep(
         float px, float pz, float hx, float hz,
         NoiseStack noise, int halfX, int halfZ,
         int sizeX, int sizeZ, bool[,] used, HashSet<int> selfCells,
         int curCxi, int curCzi)
     {
-        foreach (var offset in RiverHeadingRotations)
+        for (var pass = 0; pass < 2; pass++)
         {
-            var c = MathF.Cos(offset);
-            var s = MathF.Sin(offset);
-            var nhx = hx * c - hz * s;
-            var nhz = hx * s + hz * c;
-            var nx = (int)MathF.Floor(px + nhx);
-            var nz = (int)MathF.Floor(pz + nhz);
-            if ((uint)nx >= (uint)sizeX || (uint)nz >= (uint)sizeZ) continue;
-            var stayingPut = nx == curCxi && nz == curCzi;
-            if (!stayingPut)
+            var enforceMountain = pass < 1;
+            foreach (var offset in RiverHeadingRotations)
             {
-                if (used[nx, nz]) continue;
-                if (selfCells.Contains(nx * sizeZ + nz)) continue;
+                var c = MathF.Cos(offset);
+                var s = MathF.Sin(offset);
+                var nhx = hx * c - hz * s;
+                var nhz = hx * s + hz * c;
+                var nx = (int)MathF.Floor(px + nhx);
+                var nz = (int)MathF.Floor(pz + nhz);
+                if ((uint)nx >= (uint)sizeX || (uint)nz >= (uint)sizeZ) continue;
+                var stayingPut = nx == curCxi && nz == curCzi;
+                if (!stayingPut)
+                {
+                    if (used[nx, nz]) continue;
+                    if (selfCells.Contains(nx * sizeZ + nz)) continue;
+                }
+                if (enforceMountain)
+                {
+                    var wx = nx - halfX;
+                    var wz = nz - halfZ;
+                    var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
+                    if (maskRaw >= MountainOnset) continue;
+                }
+                return (nhx, nhz);
             }
-            var wx = nx - halfX;
-            var wz = nz - halfZ;
-            var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
-            if (maskRaw >= MountainOnset) continue;
-            return (nhx, nhz);
         }
         return null;
     }
