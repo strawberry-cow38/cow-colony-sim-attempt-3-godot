@@ -59,10 +59,11 @@ public class WorldGenTests
     public void Generate_Step_Bounded_By_Noise_Gradient()
     {
         // Mountains are raw smooth (no plateau quantization); per-tile step
-        // is bounded by the ridge-noise gradient plus detail swing. 20 is a
+        // is bounded by the ridge-noise gradient plus detail swing. 40 is a
         // generous ceiling — anything above that signals the noise stack is
         // producing unbounded spikes rather than a continuous surface. Lake
-        // shorelines sit just inside this bound (shore +few → bed -few).
+        // and river banks produce deeper intentional cliffs (up to ~mountain
+        // height above sea level), so the threshold is loose.
         var world = new TileWorld();
         WorldGen.Generate(world, seed: 1111, sizeX: 768, sizeZ: 64);
 
@@ -75,7 +76,7 @@ public class WorldGenTests
             var step = Math.Abs(a - b);
             if (step > maxStep) maxStep = step;
         }
-        Assert.True(maxStep <= 20, $"max per-tile step {maxStep} > 20");
+        Assert.True(maxStep <= 40, $"max per-tile step {maxStep} > 40");
     }
 
     [Fact]
@@ -86,6 +87,26 @@ public class WorldGenTests
         Assert.Equal(a.Continent.GetNoise(3f, -2f), b.Continent.GetNoise(3f, -2f));
         Assert.Equal(a.Ridge.GetNoise(10f, 5f),    b.Ridge.GetNoise(10f, 5f));
         Assert.Equal(a.Lake.GetNoise(-7f, 0f),     b.Lake.GetNoise(-7f, 0f));
+        Assert.Equal(a.RiverSource.GetNoise(1f, 1f), b.RiverSource.GetNoise(1f, 1f));
+        Assert.Equal(a.Meander.GetNoise(2f, 3f),     b.Meander.GetNoise(2f, 3f));
+    }
+
+    [Fact]
+    public void Generate_Produces_Water_Tiles_On_Large_Map()
+    {
+        // Rivers + lakes together must produce at least some water surface on
+        // a map big enough for river sources to seed. 256 exceeds two sample
+        // strides so multiple source candidates get evaluated.
+        var world = new TileWorld();
+        WorldGen.Generate(world, seed: 2468, sizeX: 256, sizeZ: 256);
+
+        var waterCount = 0;
+        for (var x = -128; x < 128; x++)
+        for (var z = -128; z < 128; z++)
+        {
+            if (world.TerrainKindAt(x, z) == TileKind.Water) waterCount++;
+        }
+        Assert.True(waterCount > 0, "expected Water cells on 256x256 map");
     }
 
     [Fact]
