@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
+using CowColonySim.Sim;
 using CowColonySim.Sim.Grid;
 using CowColonySim.UI;
 using GArray = Godot.Collections.Array;

@@ -61,6 +61,11 @@ public static class WorldGen
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
 
+        // Scale coast radius down on small maps so the whole grid doesn't get
+        // submerged. On a 32x32 test map, a 48-tile rim would flood everything;
+        // clamp so at least half the map stays dry by default.
+        var coastRadius = Math.Min(CoastRadiusTiles, Math.Min(sizeX, sizeZ) / 4);
+
         var heights = new int[sizeX, sizeZ];
         Parallel.For(0, sizeX, xi =>
         {
@@ -101,9 +106,9 @@ public static class WorldGen
                 // instead of only the four cardinal edges.
                 var edgeDist = Math.Min(Math.Min(xi, sizeX - 1 - xi),
                                         Math.Min(zi, sizeZ - 1 - zi));
-                if (edgeDist < CoastRadiusTiles)
+                if (coastRadius > 0 && edgeDist < coastRadius)
                 {
-                    var coastT = 1f - (edgeDist / (float)CoastRadiusTiles);
+                    var coastT = 1f - (edgeDist / (float)coastRadius);
                     var coastBlend = Smoothstep(0f, 1f, coastT);
                     baseH = Lerp(baseH, CoastFloor, coastBlend);
                 }
