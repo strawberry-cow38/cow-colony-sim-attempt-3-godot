@@ -15,8 +15,9 @@ public partial class BenchHarness : Node
 
     public override void _Ready()
     {
-        var args = OS.GetCmdlineUserArgs();
-        foreach (var a in args)
+        foreach (var a in OS.GetCmdlineArgs())
+            if (a == "--bench") _enabled = true;
+        foreach (var a in OS.GetCmdlineUserArgs())
             if (a == "--bench") _enabled = true;
 
         if (!_enabled) return;
