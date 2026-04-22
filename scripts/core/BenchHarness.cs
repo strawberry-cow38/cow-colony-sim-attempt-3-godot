@@ -85,9 +85,11 @@ public partial class BenchHarness : Node
             int y;
             try { y = WorldGen.SurfaceY(host.Tiles, x, z); }
             catch { continue; }
+            var tp = new TilePos(x, y, z);
             var cow = host.World.Spawn();
             cow.Add(new Colonist());
-            cow.Add(TileMath.FeetOfTile(new TilePos(x, y, z)));
+            cow.Add(TileMath.FeetOfTile(tp));
+            cow.Add(new LiveAnchor(tp, 4));
             spawned++;
         }
         GD.Print($"[BENCH] spawned {spawned} stress cows");
