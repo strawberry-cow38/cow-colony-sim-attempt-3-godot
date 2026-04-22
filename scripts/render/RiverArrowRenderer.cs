@@ -68,17 +68,25 @@ public sealed partial class RiverArrowRenderer : Node3D
 
         foreach (var path in _simHost.Tiles.RiverPaths)
         {
-            if (path.Cells.Count == 0) continue;
-            var fdx = path.FlowDx;
-            var fdz = path.FlowDz;
-            if (fdx == 0 && fdz == 0) continue;
-            var mag = MathF.Sqrt(fdx * fdx + fdz * fdz);
-            var fx = fdx / mag;
-            var fz = fdz / mag;
-            for (var i = SampleStrideCells / 2; i < path.Cells.Count; i += SampleStrideCells)
+            var count = path.Cells.Count;
+            if (count < 4) continue;
+            // Local tangent window: look ahead/behind a fixed distance
+            // along the path and take the displacement as the flow vector
+            // at the sample. Short enough to follow bends, long enough to
+            // smooth out per-cell staircase jitter.
+            const int window = 8;
+            for (var i = SampleStrideCells / 2; i < count; i += SampleStrideCells)
             {
-                var cell = path.Cells[i];
-                PlaceArrow(cell.X, cell.Z, fx, fz);
+                var a = path.Cells[Math.Max(0, i - window)];
+                var b = path.Cells[Math.Min(count - 1, i + window)];
+                var dx = b.X - a.X;
+                var dz = b.Z - a.Z;
+                var mag = MathF.Sqrt(dx * dx + dz * dz);
+                if (mag < 1e-3f) continue;
+                var fx = dx / mag;
+                var fz = dz / mag;
+                var c = path.Cells[i];
+                PlaceArrow(c.X, c.Z, fx, fz);
             }
         }
     }

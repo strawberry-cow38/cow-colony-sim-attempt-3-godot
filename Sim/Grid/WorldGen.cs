@@ -41,13 +41,23 @@ public static class WorldGen
     // disc). Fixed depth below sea level so water surface is flat.
     private const int   RiverBedRadius         = 2;
     private const int   RiverBedDepth          = 2;
-    // Meander bias weight vs goal-progress weight. Raised above 1 so within
-    // the forced-progress window (never step away from goal) the meander
-    // angle dominates step selection — lots of lateral zig-zag. Convergence
-    // is still guaranteed because out-of-direction steps are pre-filtered.
-    private const float RiverMeanderWeight     = 1.2f;
-    // Max walk length fudge factor. Path must fit in manhattan(start,end)
-    // steps plus this slack for chebyshev/diagonal moves and meander.
+    // Goal bias at leisure. Constant pull toward the far coast while there
+    // is budget to spare — river drifts toward the goal, meander dominates
+    // the local heading. Smaller values mean curlier rivers.
+    private const float RiverGoalBaseBias      = 0.30f;
+    // Goal-bias boost ramp. urgency = smoothstep(0.35, 1.0, distLeft/budget)
+    // — stays 0 while the river has budget, grows to 1 near the limit,
+    // turning the path into a goal-locked line when time is running out.
+    private const float RiverGoalUrgencyBoost  = 1.8f;
+    // Mountain-avoidance weight. At each step, the 8 candidates are
+    // penalized by mountain-mask value so paths route around mountains
+    // instead of through them. High enough to matter, low enough that
+    // rivers still cross mountain shoulders when no lower route exists.
+    private const float RiverMountainAvoid     = 2.5f;
+    // Budget = manhattan * multiplier + slack. Raised so rivers have room
+    // to meander laterally without running out before they reach the far
+    // coast.
+    private const float RiverBudgetMultiplier  = 2.4f;
     private const int   RiverWalkSlack         = 128;
     // River-proximity mask radii. Within RiverMountainInner tiles of any
     // river cell, mountain weight is fully suppressed and baseH is pulled
@@ -61,12 +71,14 @@ public static class WorldGen
     // visible channel without drowning the surrounding land.
     private const float RiverValleyH           = 3f;
 
-    // Bank-lowering pass. Iterative single-step dilation: every cell must
-    // sit at most one tile above its lowest 8-neighbor. Sub-sea cells
-    // (river beds, lake beds, coast-fade rim) act as implicit seeds — the
-    // dilation pulls inland heights down along a pyramid of slope 1 tile
-    // per tile until the ramp reaches ambient terrain and the sweep
-    // terminates. Guarantees no cliff-jump at bank edges.
+    // Bank-lowering pass. Iterative single-step dilation limited to the
+    // shoreline band — cells at or below (WaterLevelY + BankDilationCap)
+    // get pulled toward their lowest neighbor with a slope 1, smoothing
+    // the water → plains transition. Mountains (anything above the cap)
+    // are untouched so ridgelines do not collapse into pyramids. A ramp
+    // never reaches into mountain terrain because the sweep terminates at
+    // the cap height.
+    private const int BankDilationCap = 6;
 
     // Detail noise amplitude. Low enough that plains and hills read as
     // gently rolling rather than jagged.
@@ -272,16 +284,17 @@ public static class WorldGen
         return surfaceTiles;
     }
 
-    // Pick RiverCount random coast-to-coast paths. Each river starts on a
-    // random coast side, ends on a different side, and meanders between
-    // the two with a noise-perturbed walk. Progress toward the goal is
-    // forced on each step so the path always reaches the far coast — no
-    // half-rivers, no merges, no tributaries. A shared `used` mask marks
-    // cells claimed by earlier rivers; subsequent rivers refuse to step
-    // into those cells so paths cannot cross. If a river gets trapped
-    // (no forward-progress free step), it falls back to stepping through
-    // claimed cells rather than stalling — better to cross than to leave
-    // a half-river.
+    // Pick RiverCount coast-to-coast paths using a heading-based walk.
+    // At each step the walker blends the meander-noise angle (primary) with
+    // a goal-directional pull (weak while there is budget, strong when
+    // nearing exhaustion), then picks whichever of the 8 neighbor cells
+    // aligns best with the blended heading while penalizing mountain
+    // terrain so rivers route around ridges. Progress is NOT force-filtered
+    // — the walker is free to briefly wander backwards when the meander
+    // noise calls for it, producing natural gentle curves instead of the
+    // zig-zag that a hard forced-progress filter generates. A shared
+    // `used` mask enforces non-crossing across river indices; the fallback
+    // relaxes it only when the walker is fully pinned.
     private static List<RiverPath> PlanRivers(
         NoiseStack noise, int seed,
         int sizeX, int sizeZ, int halfX, int halfZ)
@@ -305,7 +318,8 @@ public static class WorldGen
 
             var cells = new List<(int X, int Z)>();
             var cxi = xiS; var czi = ziS;
-            var maxSteps = Math.Abs(xiE - xiS) + Math.Abs(ziE - ziS) + RiverWalkSlack;
+            var manhattan = Math.Abs(xiE - xiS) + Math.Abs(ziE - ziS);
+            var maxSteps = (int)(manhattan * RiverBudgetMultiplier) + RiverWalkSlack;
             for (var step = 0; step < maxSteps; step++)
             {
                 if ((uint)cxi < (uint)sizeX && (uint)czi < (uint)sizeZ)
@@ -313,71 +327,89 @@ public static class WorldGen
                     cells.Add((cxi - halfX, czi - halfZ));
                     used[cxi, czi] = true;
                 }
-                if (cxi == xiE && czi == ziE) break;
+                // Reached the far coast — stop. Chebyshev radius 1 snaps
+                // the tail cell cleanly to the endpoint so the path ends
+                // on the edge without a final awkward step.
+                if (Math.Max(Math.Abs(xiE - cxi), Math.Abs(ziE - czi)) <= 1) break;
 
                 var dxGoal = xiE - cxi;
                 var dzGoal = ziE - czi;
-                var sgX = Math.Sign(dxGoal);
-                var sgZ = Math.Sign(dzGoal);
-                var goalLen = MathF.Sqrt(dxGoal * dxGoal + dzGoal * dzGoal);
+                var chebLeft = Math.Max(Math.Abs(dxGoal), Math.Abs(dzGoal));
+                var remaining = Math.Max(1, maxSteps - step);
+                // Urgency: 0 while there is plenty of budget, ramps to 1
+                // as the walker nears the step limit. Past 1 the goal pull
+                // dominates completely and the path straight-lines home.
+                var urgencyRaw = chebLeft / (float)remaining;
+                var urgency = Smoothstep(0.35f, 1.0f, urgencyRaw);
 
-                // Meander frequency is tuned in NoiseStack (CellFeature.cs).
-                // Sample at unscaled tile coords so the frequency there is
-                // the wavelength you get — earlier code multiplied by 0.08
-                // which produced a ~1000-tile wavelength (straight rivers).
+                // Low-freq meander noise at unscaled tile coords. Frequency
+                // is set in NoiseStack (CellFeature.cs); lower freq = gentler
+                // long bends, higher freq = tighter wiggles.
                 var mAng = noise.Meander.GetNoise(cxi, czi) * MathF.PI;
-                var pdx = MathF.Cos(mAng);
-                var pdz = MathF.Sin(mAng);
+                var mdx = MathF.Cos(mAng);
+                var mdz = MathF.Sin(mAng);
 
-                var bestK = -1;
-                var bestScore = float.NegativeInfinity;
-                for (var k = 0; k < 8; k++)
-                {
-                    var stepX = dxs[k]; var stepZ = dzs[k];
-                    if (sgX != 0 && stepX * sgX < 0) continue;
-                    if (sgZ != 0 && stepZ * sgZ < 0) continue;
-                    var nxi = cxi + stepX; var nzi = czi + stepZ;
-                    if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
-                    if (used[nxi, nzi]) continue;
-                    var invLen = 1f / MathF.Sqrt(stepX * stepX + stepZ * stepZ);
-                    var progAlign = goalLen > 0f
-                        ? (stepX * dxGoal + stepZ * dzGoal) * invLen / goalLen
-                        : 0f;
-                    var meanderAlign = (stepX * pdx + stepZ * pdz) * invLen;
-                    var score = progAlign + meanderAlign * RiverMeanderWeight;
-                    if (score > bestScore) { bestScore = score; bestK = k; }
-                }
+                var goalLen = MathF.Sqrt(dxGoal * dxGoal + dzGoal * dzGoal);
+                var gdx = goalLen > 0f ? dxGoal / goalLen : 0f;
+                var gdz = goalLen > 0f ? dzGoal / goalLen : 0f;
+
+                var goalW = RiverGoalBaseBias + urgency * RiverGoalUrgencyBoost;
+                var hx = mdx + goalW * gdx;
+                var hz = mdz + goalW * gdz;
+                var hMag = MathF.Sqrt(hx * hx + hz * hz);
+                if (hMag > 1e-6f) { hx /= hMag; hz /= hMag; }
+
+                var bestK = PickStep(cxi, czi, hx, hz, dxs, dzs,
+                    noise, halfX, halfZ, sizeX, sizeZ, used, avoidUsed: true);
                 if (bestK < 0)
                 {
-                    // Trapped: relax non-crossing to avoid a half-river.
-                    bestScore = float.NegativeInfinity;
-                    for (var k = 0; k < 8; k++)
-                    {
-                        var stepX = dxs[k]; var stepZ = dzs[k];
-                        if (sgX != 0 && stepX * sgX < 0) continue;
-                        if (sgZ != 0 && stepZ * sgZ < 0) continue;
-                        var nxi = cxi + stepX; var nzi = czi + stepZ;
-                        if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
-                        var invLen = 1f / MathF.Sqrt(stepX * stepX + stepZ * stepZ);
-                        var progAlign = goalLen > 0f
-                            ? (stepX * dxGoal + stepZ * dzGoal) * invLen / goalLen
-                            : 0f;
-                        if (progAlign > bestScore) { bestScore = progAlign; bestK = k; }
-                    }
+                    // Fully pinned — relax non-crossing rather than stall.
+                    bestK = PickStep(cxi, czi, hx, hz, dxs, dzs,
+                        noise, halfX, halfZ, sizeX, sizeZ, used, avoidUsed: false);
                 }
                 if (bestK < 0) break;
                 cxi += dxs[bestK];
                 czi += dzs[bestK];
             }
 
-            // Flow direction: net start→end unit-ish vector. Rivers with
-            // sideA==sideB (can't happen by construction) would degenerate;
-            // sign(0) is 0 for orthogonal starts so flow reads as pure axis.
+            // Net-direction flow is retained for consumers that only need
+            // a single scalar (e.g. water-wheel orientation defaults).
+            // Renderers that want per-cell tangent should derive it from
+            // the neighboring cells in the Cells list — net direction
+            // doesn't reflect local bends.
             var flowDx = Math.Sign(xiE - xiS);
             var flowDz = Math.Sign(ziE - ziS);
             paths.Add(new RiverPath(cells, flowDx, flowDz));
         }
         return paths;
+    }
+
+    // Score each of the 8 neighbors against the target heading + mountain
+    // penalty. Highest score wins. Returns -1 when no free neighbor is
+    // reachable (caller will relax non-crossing and retry).
+    private static int PickStep(int cxi, int czi, float hx, float hz,
+        int[] dxs, int[] dzs, NoiseStack noise, int halfX, int halfZ,
+        int sizeX, int sizeZ, bool[,] used, bool avoidUsed)
+    {
+        var bestK = -1;
+        var bestScore = float.NegativeInfinity;
+        for (var k = 0; k < 8; k++)
+        {
+            var stepX = dxs[k]; var stepZ = dzs[k];
+            var nxi = cxi + stepX; var nzi = czi + stepZ;
+            if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+            if (avoidUsed && used[nxi, nzi]) continue;
+            var invLen = 1f / MathF.Sqrt(stepX * stepX + stepZ * stepZ);
+            var headingAlign = (stepX * hx + stepZ * hz) * invLen;
+
+            var wx = nxi - halfX; var wz = nzi - halfZ;
+            var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
+            var mountainPenalty = Smoothstep(MountainOnset, MountainFull, maskRaw);
+
+            var score = headingAlign - mountainPenalty * RiverMountainAvoid;
+            if (score > bestScore) { bestScore = score; bestK = k; }
+        }
+        return bestK;
     }
 
     // Chebyshev distance transform over the river-cell mask. Two passes
@@ -476,15 +508,17 @@ public static class WorldGen
         }
     }
 
-    // Iterative single-step dilation. After each pass every cell sits at
-    // most one tile above its lowest 8-neighbor; repeat until the heightmap
-    // stabilizes. Sub-sea-level cells (river beds, lake beds, coast rim)
-    // seed the dilation implicitly — they're already lower than their
-    // neighbors, so the sweep pulls inland terrain down in a pyramid of
-    // slope 1 until it meets ambient and terminates. Guarantees no
-    // single-tile cliff jumps > 1 between any bank cell and its neighbor.
+    // Iterative single-step dilation, restricted to the shoreline band.
+    // Only cells at or below (WaterLevelY + BankDilationCap) can be
+    // lowered — inland terrain above the cap is left alone so mountains
+    // stay tall. Within the band the sweep pulls each cell down to at
+    // most 1 tile above its lowest 8-neighbor, giving a gentle slope-1
+    // ramp from sub-sea beds up to the cap. Beyond the cap, slopes are
+    // whatever the noise stack produced (smooth ridge noise, so per-tile
+    // jumps stay small).
     private static void LowerBanks(int[,] heights, int sizeX, int sizeZ)
     {
+        var bandCeiling = WaterLevelY + BankDilationCap;
         var changed = true;
         var maxPasses = 256;
         for (var pass = 0; pass < maxPasses && changed; pass++)
@@ -493,6 +527,7 @@ public static class WorldGen
             for (var xi = 0; xi < sizeX; xi++)
             for (var zi = 0; zi < sizeZ; zi++)
             {
+                if (heights[xi, zi] > bandCeiling) continue;
                 var minN = int.MaxValue;
                 for (var dz = -1; dz <= 1; dz++)
                 for (var dx = -1; dx <= 1; dx++)
@@ -503,9 +538,6 @@ public static class WorldGen
                     if (heights[nxi, nzi] < minN) minN = heights[nxi, nzi];
                 }
                 if (minN == int.MaxValue) continue;
-                // Floor at water level so the dilation never drags dry
-                // cells below sea level — sub-sea beds stay local, the
-                // ramp always rises from the waterline upward.
                 var target = Math.Max(WaterLevelY, minN + 1);
                 if (heights[xi, zi] > target)
                 {
