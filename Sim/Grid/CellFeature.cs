@@ -14,6 +14,7 @@ public sealed class NoiseStack
     public readonly FastNoiseLite Ridge;
     public readonly FastNoiseLite Detail;
     public readonly FastNoiseLite Lake;
+    public readonly FastNoiseLite Ramp;
 
     public NoiseStack(int seed)
     {
@@ -22,6 +23,7 @@ public sealed class NoiseStack
         Ridge        = Make(seed + 3, 0.006f,  4, FastNoiseLite.FractalType.Ridged);
         Detail       = Make(seed + 4, 0.04f,   2, FastNoiseLite.FractalType.FBm);
         Lake         = Make(seed + 5, 0.010f,  2, FastNoiseLite.FractalType.FBm);
+        Ramp         = Make(seed + 6, 0.008f,  2, FastNoiseLite.FractalType.FBm);
     }
 
     private static FastNoiseLite Make(int seed, float freq, int oct, FastNoiseLite.FractalType type)

@@ -11,10 +11,11 @@ public static class WorldGen
     // Sea level. Columns below this fill with Water tiles up to (WaterLevelY-1).
     public const int WaterLevelY = 0;
 
-    // Mountain region onset. MountainMask noise above 0.45 begins ramping into
-    // ridge-shaped peaks; above 0.70 is fully mountainous. Smoothstep-blended.
-    private const float MountainOnset = 0.45f;
-    private const float MountainFull  = 0.70f;
+    // Mountain region onset. MountainMask noise above 0.55 begins ramping into
+    // ridge-shaped peaks; above 0.80 is fully mountainous. Smoothstep-blended.
+    // Raised from 0.45/0.70 to reduce overall mountain coverage per request.
+    private const float MountainOnset = 0.55f;
+    private const float MountainFull  = 0.80f;
 
     // Plateau quantization. Above this elevation, heights snap to tier
     // multiples so adjacent tiles within one tier share a flat value. Cliff
@@ -23,11 +24,20 @@ public static class WorldGen
     private const float QuantStart = 15f;
     private const float TierStep   = 6f;  // > CliffDelta so one step = one clean cliff.
 
+    // Ramp blend. Where Ramp noise is high, the quantized tier value lerps
+    // toward the unquantized (raw) height so a tier transition becomes a
+    // smooth slope instead of a hard cliff face. Patches are low-frequency
+    // so each ramp spans several tiles of walkable incline.
+    private const float RampOnset = 0.55f;
+    private const float RampFull  = 0.80f;
+
     // Lake carve. Mask above onset pulls height below sea level; only fires
-    // when base elevation is already low so mountains stay dry.
+    // when base elevation is already low AND mountain mask is low so cliff
+    // feet stay dry (no lakes touching mountain walls).
     private const float LakeOnset = 0.58f;
     private const float LakeFull  = 0.78f;
     private const float LakeMaxBaseH = 8f;
+    private const float LakeMountainBuffer = 0.30f;
 
     // Detail noise amplitude. Strictly < CliffDelta so adjacent tiles never
     // disagree by more than CliffDelta from detail alone — no spurious cliffs
@@ -71,20 +81,26 @@ public static class WorldGen
 
                 // Plateau quantization. Step size > CliffDelta so every tier
                 // boundary produces exactly one cliff wall in the mesher.
+                // Ramp blend: where Ramp mask is high, the quantized value
+                // lerps back toward raw so tier boundaries become walkable
+                // slopes over several tiles instead of hard cliffs.
                 if (baseH > QuantStart)
                 {
                     var over = baseH - QuantStart;
                     var tier = MathF.Floor(over / TierStep) * TierStep;
-                    baseH = QuantStart + tier;
+                    var quantized = QuantStart + tier;
+                    var rampMaskRaw = (noise.Ramp.GetNoise(x, z) + 1f) * 0.5f;
+                    var rampWeight = Smoothstep(RampOnset, RampFull, rampMaskRaw);
+                    baseH = Lerp(quantized, baseH, rampWeight);
                 }
 
                 // Detail pass. Capped < CliffDelta so flat plains never spike.
                 var detail = noise.Detail.GetNoise(x, z) * DetailAmplitude;
 
                 // Lake carve. Mask-weighted pull toward a negative floor only
-                // when base is low enough to sit near sea level — mountain
-                // lakes never appear, which keeps cliff regions dry.
-                if (baseH < LakeMaxBaseH)
+                // when base is low enough to sit near sea level AND mountain
+                // influence is weak — keeps lakes away from cliff feet.
+                if (baseH < LakeMaxBaseH && maskRaw < LakeMountainBuffer)
                 {
                     var lakeMask = (noise.Lake.GetNoise(x, z) + 1f) * 0.5f;
                     var lakeWeight = Smoothstep(LakeOnset, LakeFull, lakeMask);
