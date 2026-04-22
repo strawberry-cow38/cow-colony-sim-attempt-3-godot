@@ -42,6 +42,25 @@ public static class WorldGen
     private const int   RiverMaxWalkSteps      = 8192;
     private const float RiverMeanderWeight     = 1.6f;
 
+    // River widening. Flow count (number of walks that passed through the
+    // cell) maps to a dilation radius so merged tributaries fatten toward
+    // the mouth. Cells near sea level receive a minimum radius to form a
+    // visible estuary fan. Ring dilation skips any neighbor whose natural
+    // terrain sits more than RiverWidenMaxRise tiles above the spine
+    // surface — otherwise widening would carve ditches into hillsides.
+    private const int   RiverFlowMidThreshold  = 3;
+    private const int   RiverFlowHiThreshold   = 8;
+    private const int   RiverWidenRadiusMid    = 1;
+    private const int   RiverWidenRadiusHi     = 2;
+    private const int   RiverEstuaryBand       = 4;
+    private const int   RiverEstuaryRadius     = 2;
+    // Symmetric tolerance: only widen into cells whose natural terrain sits
+    // within this many tiles of the spine surface. Keeps cliffs cliffy and
+    // riverbanks smooth — widening never carves a ditch or backfills a
+    // canyon. Kept strictly less than CliffDelta so the resulting slope
+    // never trips the Cap rule.
+    private const int   RiverWidenTolerance    = 1;
+
     // Detail noise amplitude. Low enough that plains and hills read as
     // gently rolling rather than jagged.
     private const float DetailAmplitude = 1.3f;
@@ -327,12 +346,14 @@ public static class WorldGen
             }
         }
 
-        // Carve pass. For each cell with accumulated flow, record the river
-        // surface = pre-carve terrain height and drop the bed by one tile so
-        // a water tile forms. The mesher emits the water plane at the
-        // recorded surface; banks remain at surrounding terrain, giving a
-        // waterline that sits just below grass. Cross-cell steps in surface
-        // Y become natural waterfalls via the cliff Cap rule.
+        // Widen pass. Flow accumulation tells us which spine cells carry the
+        // most water; cells near sea level get a minimum radius so the mouth
+        // fans out as an estuary. We stamp a disc of that radius around each
+        // spine cell into widenedTop, recording the spine's pre-carve
+        // surface. Ring cells are skipped when their natural terrain is more
+        // than RiverWidenMaxRise tiles above the spine surface (so widening
+        // doesn't carve ditches into hillsides).
+        var widenedTop = new int[sizeX, sizeZ];
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
@@ -342,6 +363,56 @@ public static class WorldGen
             if (heights[xi, zi] <= WaterLevelY) continue;
 
             var surface = heights[xi, zi];
+            var radius = f >= RiverFlowHiThreshold
+                ? RiverWidenRadiusHi
+                : (f >= RiverFlowMidThreshold ? RiverWidenRadiusMid : 0);
+            if (surface <= WaterLevelY + RiverEstuaryBand && radius < RiverEstuaryRadius)
+                radius = RiverEstuaryRadius;
+
+            // Always seed the spine cell itself.
+            if (widenedTop[xi, zi] == 0 || widenedTop[xi, zi] > surface)
+                widenedTop[xi, zi] = surface;
+            if (radius == 0) continue;
+
+            var r2 = radius * radius;
+            for (var dx = -radius; dx <= radius; dx++)
+            for (var dz = -radius; dz <= radius; dz++)
+            {
+                if (dx == 0 && dz == 0) continue;
+                if (dx * dx + dz * dz > r2) continue;
+                var txi = xi + dx;
+                var tzi = zi + dz;
+                if ((uint)txi >= (uint)sizeX || (uint)tzi >= (uint)sizeZ) continue;
+                if (isLake[txi, tzi]) continue;
+                if (heights[txi, tzi] <= WaterLevelY) continue;
+                // Only widen into cells close to the spine surface. Skips
+                // hillsides (too high → trench) and canyons (too low →
+                // backfill). Kept within CliffDelta so Cap doesn't emit an
+                // artificial cliff along the widened bank.
+                var delta = heights[txi, tzi] - surface;
+                if (delta > RiverWidenTolerance) continue;
+                if (delta < -RiverWidenTolerance) continue;
+                // Lowest surface wins, so when two tributaries merge the
+                // downstream (lower) surface takes over — no upstream bump.
+                if (widenedTop[txi, tzi] == 0 || widenedTop[txi, tzi] > surface)
+                    widenedTop[txi, tzi] = surface;
+            }
+        }
+
+        // Carve pass. For each widened cell, record the river surface =
+        // the (possibly inherited) spine surface, then drop the bed by one
+        // tile so a water tile forms on top. The mesher emits the water
+        // plane at the recorded surface; banks remain at surrounding terrain,
+        // giving a waterline that sits just below grass. Cross-cell steps in
+        // surface Y become natural waterfalls via the cliff Cap rule.
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+        {
+            var surface = widenedTop[xi, zi];
+            if (surface <= 0) continue;
+            if (isLake[xi, zi]) continue;
+            if (heights[xi, zi] <= WaterLevelY) continue;
+
             var bedH = surface - 1;
             if (bedH < minHeight) bedH = minHeight;
             heights[xi, zi] = bedH;
