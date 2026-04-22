@@ -20,6 +20,7 @@ boot_splash/show_image=false
 [autoload]
 
 SimHost="*res://scripts/core/SimHost.cs"
+BenchHarness="*res://scripts/core/BenchHarness.cs"
 
 [dotnet]
 
