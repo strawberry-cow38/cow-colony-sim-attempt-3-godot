@@ -64,6 +64,8 @@ public sealed partial class GridRenderer : Node3D
     private SimHost? _simHost;
     private StandardMaterial3D? _material;
     private StandardMaterial3D? _waterMaterial;
+    private StandardMaterial3D? _oceanMaterial;
+    private MeshInstance3D? _oceanQuad;
     private Shader? _terrainShader;
     private Texture2D? _grassTex;
     private ArrayMesh? _g4PatchMesh;
@@ -106,6 +108,29 @@ public sealed partial class GridRenderer : Node3D
             Roughness = 0.4f,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
         };
+        // "Infinite" ocean. One giant flat PlaneMesh at the same Y as the
+        // per-tile water planes. Uses its own StandardMaterial3D with a
+        // constant blue albedo so it doesn't need per-vertex color data.
+        // Single draw call — zero per-tile cost.
+        var oceanTint = TileAtlas.TintFor(TileKind.Water);
+        _oceanMaterial = new StandardMaterial3D
+        {
+            AlbedoColor = oceanTint,
+            Transparency = BaseMaterial3D.TransparencyEnum.AlphaDepthPrePass,
+            Roughness = 0.4f,
+        };
+        var oceanY = WorldGen.WaterLevelY * SimConstants.TileHeightMeters
+                     - HeightmapTerrainMesher.WaterTopDropMeters;
+        var oceanMesh = new PlaneMesh { Size = new Vector2(20000f, 20000f) };
+        _oceanQuad = new MeshInstance3D
+        {
+            Mesh = oceanMesh,
+            MaterialOverride = _oceanMaterial,
+            Position = new Vector3(0f, oceanY, 0f),
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        };
+        AddChild(_oceanQuad);
+
         if (GpuTerrainEnabled)
         {
             _terrainShader = GD.Load<Shader>("res://scripts/render/shaders/terrain_heightmap.gdshader");

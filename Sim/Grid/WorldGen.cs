@@ -44,6 +44,14 @@ public static class WorldGen
     // gently rolling rather than jagged.
     private const float DetailAmplitude = 1.3f;
 
+    // Coastal border. Every map is ringed by ocean — tiles within
+    // CoastRadiusTiles of the map edge blend from normal terrain toward a
+    // submerged floor so a natural shoreline ringed with sand shores forms.
+    // The "infinite" far ocean is a flat quad in scene.cs; this fade handles
+    // the in-map transition from land to coast.
+    private const int   CoastRadiusTiles  = 48;
+    private const float CoastFloor        = -5f;
+
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
         float frequency = DefaultFrequency)
@@ -62,8 +70,11 @@ public static class WorldGen
                 var z = zi - halfZ;
 
                 // Continent: slow, gentle base elevation — rolling pasture.
+                // Baseline shifted up so interior stays dry by default;
+                // coast fade below pulls the outer rim under water to form
+                // a shoreline.
                 var continent = noise.Continent.GetNoise(x, z);      // -1..1
-                var baseH = 2f + continent * 6f;                      // -4..+8
+                var baseH = 6f + continent * 4f;                      // +2..+10
 
                 // Mountain lift. Smooth mask picks out mountainous regions.
                 // Ridged FBm within the mask produces dramatic peak-and-valley
@@ -83,6 +94,19 @@ public static class WorldGen
                 // drops a tile below sea level while its neighbor stays on
                 // land) via the Cap rule below. Ridge noise supplies all the
                 // peak/valley drama directly.
+
+                // Coastal fade: cells near the map edge blend toward a
+                // submerged floor so every map has a natural shore. Uses
+                // Chebyshev distance so the entire rim is submerged evenly
+                // instead of only the four cardinal edges.
+                var edgeDist = Math.Min(Math.Min(xi, sizeX - 1 - xi),
+                                        Math.Min(zi, sizeZ - 1 - zi));
+                if (edgeDist < CoastRadiusTiles)
+                {
+                    var coastT = 1f - (edgeDist / (float)CoastRadiusTiles);
+                    var coastBlend = Smoothstep(0f, 1f, coastT);
+                    baseH = Lerp(baseH, CoastFloor, coastBlend);
+                }
 
                 // Detail pass. Capped < CliffDelta so flat plains never spike.
                 // Muted on mountain plateaus (scaled by 1 - mountainWeight) so
