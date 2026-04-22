@@ -276,14 +276,17 @@ public static class WorldGen
 
         // Carve. For each cell with flow, drop height below sea level and
         // stamp a small disk for width. Skip lake cells so rivers never
-        // overwrite them. Bank cliffs are intentional — river banks read
-        // as short drops rather than ramps.
+        // overwrite them. Gated on lowland (same LakeMaxBaseH threshold as
+        // the lake carve) so rivers only become visible near water level —
+        // upstream cells still accumulate flow but keep their terrain so
+        // bank cliffs stay bounded.
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
             var f = flow[xi, zi];
             if (f <= 0) continue;
             if (isLake[xi, zi]) continue;
+            if (heights[xi, zi] > LakeMaxBaseH) continue;
 
             var widthR = Math.Min(3, f / 2);
             var depth = Math.Min(3, 1 + f / 4);
@@ -297,6 +300,7 @@ public static class WorldGen
                 var nxi = xi + dx; var nzi = zi + dz;
                 if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
                 if (isLake[nxi, nzi]) continue;
+                if (heights[nxi, nzi] > LakeMaxBaseH) continue;
                 if (heights[nxi, nzi] <= floorH) continue;
                 heights[nxi, nzi] = floorH;
             }
