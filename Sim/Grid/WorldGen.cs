@@ -287,14 +287,21 @@ public static class WorldGen
     // strong when nearing exhaustion), and the previous-step heading
     // scaled by RiverWalkerMomentum — momentum damps sharp direction
     // flips so the rasterized cell trail curves smoothly instead of
-    // zigzagging between pure 45° diagonals. Mountain cells are a hard
-    // block: if the heading would step into a cell whose mountain-mask
-    // exceeds MountainOnset, the walker rotates the heading by ±10°,
-    // ±20°, … up to ±100° to find a non-mountain cell that is also not
-    // already claimed by an earlier river. Only if no rotation finds a
-    // legal cell does the walker relax the non-crossing or mountain
-    // constraints, in that order.
+    // zigzagging between pure 45° diagonals.
+    //
+    // Hard constraints, zero relaxation:
+    //   - mountain-mask cells are never entered
+    //   - cells already claimed by another river are never entered
+    //   - a river never crosses itself (selfCells)
+    //
+    // If the walker gets pinned (FindHeadingStep returns null) or runs
+    // out of budget before reaching the far coast, the entire attempt
+    // is discarded and the next attempt re-rolls the coast sides and
+    // endpoint offsets via a different hash salt. Up to RiverMaxAttempts
+    // attempts per river — after that, the river is silently dropped
+    // rather than forced into a crossing.
     private const float RiverWalkerMomentum = 1.25f;
+    private const int   RiverMaxAttempts    = 24;
     private static readonly float[] RiverHeadingRotations =
     {
         0f,
@@ -319,134 +326,162 @@ public static class WorldGen
 
         for (var riverIdx = 0; riverIdx < RiverCount; riverIdx++)
         {
-            var u1 = HashUnit(seed, riverIdx * 7 + 1);
-            var u2 = HashUnit(seed, riverIdx * 7 + 2);
-            var u3 = HashUnit(seed, riverIdx * 7 + 3);
-            var u4 = HashUnit(seed, riverIdx * 7 + 4);
-
-            var sideA = (int)(u1 * 4) % 4;
-            var sideB = (sideA + 1 + (int)(u2 * 3)) % 4;
-            var (xiS, ziS) = CoastPoint(sideA, u3, sizeX, sizeZ);
-            var (xiE, ziE) = CoastPoint(sideB, u4, sizeX, sizeZ);
-
-            var cells = new List<(int X, int Z)>();
-            var px = xiS + 0.5f;
-            var pz = ziS + 0.5f;
-            var hPrevX = 0f;
-            var hPrevZ = 0f;
-            var lastCxi = int.MinValue;
-            var lastCzi = int.MinValue;
-            var manhattan = Math.Abs(xiE - xiS) + Math.Abs(ziE - ziS);
-            var maxSteps = (int)(manhattan * RiverBudgetMultiplier) + RiverWalkSlack;
-            for (var step = 0; step < maxSteps; step++)
+            RiverPath? committed = null;
+            for (var attempt = 0; attempt < RiverMaxAttempts && committed == null; attempt++)
             {
-                var cxi = (int)MathF.Floor(px);
-                var czi = (int)MathF.Floor(pz);
-                if ((uint)cxi < (uint)sizeX && (uint)czi < (uint)sizeZ
-                    && (cxi != lastCxi || czi != lastCzi))
-                {
-                    cells.Add((cxi - halfX, czi - halfZ));
-                    used[cxi, czi] = true;
-                    lastCxi = cxi;
-                    lastCzi = czi;
-                }
-                // Reached the far coast — stop. Chebyshev radius 1 snaps
-                // the tail cell cleanly to the endpoint so the path ends
-                // on the edge without a final awkward step.
-                if (Math.Max(Math.Abs(xiE - cxi), Math.Abs(ziE - czi)) <= 1) break;
+                // Salt mixes riverIdx and attempt so re-rolls explore a
+                // different (sideA, sideB, start, end) quadruple each try.
+                var salt = (riverIdx * 131 + attempt) * 7;
+                var u1 = HashUnit(seed, salt + 1);
+                var u2 = HashUnit(seed, salt + 2);
+                var u3 = HashUnit(seed, salt + 3);
+                var u4 = HashUnit(seed, salt + 4);
 
-                var dxGoal = xiE - cxi;
-                var dzGoal = ziE - czi;
-                var chebLeft = Math.Max(Math.Abs(dxGoal), Math.Abs(dzGoal));
-                var remaining = Math.Max(1, maxSteps - step);
-                // Urgency: 0 while there is plenty of budget, ramps to 1
-                // as the walker nears the step limit. Past 1 the goal pull
-                // dominates completely and the path straight-lines home.
-                var urgencyRaw = chebLeft / (float)remaining;
-                var urgency = Smoothstep(0.35f, 1.0f, urgencyRaw);
+                var sideA = (int)(u1 * 4) % 4;
+                var sideB = (sideA + 1 + (int)(u2 * 3)) % 4;
+                var (xiS, ziS) = CoastPoint(sideA, u3, sizeX, sizeZ);
+                var (xiE, ziE) = CoastPoint(sideB, u4, sizeX, sizeZ);
 
-                // Low-freq meander noise sampled at the walker's float
-                // position — continuous inputs produce a continuous
-                // heading vector, unlike the per-cell discrete sampling
-                // an 8-dir walker would use.
-                var mAng = noise.Meander.GetNoise(px, pz) * MathF.PI;
-                var mdx = MathF.Cos(mAng);
-                var mdz = MathF.Sin(mAng);
+                // Reject endpoints that already collide with prior rivers.
+                if ((uint)xiS < (uint)sizeX && (uint)ziS < (uint)sizeZ && used[xiS, ziS]) continue;
+                if ((uint)xiE < (uint)sizeX && (uint)ziE < (uint)sizeZ && used[xiE, ziE]) continue;
 
-                var goalLen = MathF.Sqrt(dxGoal * dxGoal + dzGoal * dzGoal);
-                var gdx = goalLen > 0f ? dxGoal / goalLen : 0f;
-                var gdz = goalLen > 0f ? dzGoal / goalLen : 0f;
-
-                var goalW = RiverGoalBaseBias + urgency * RiverGoalUrgencyBoost;
-                var hx = mdx + goalW * gdx + RiverWalkerMomentum * hPrevX;
-                var hz = mdz + goalW * gdz + RiverWalkerMomentum * hPrevZ;
-                var hMag = MathF.Sqrt(hx * hx + hz * hz);
-                if (hMag > 1e-6f) { hx /= hMag; hz /= hMag; }
-                else { hx = gdx; hz = gdz; }
-
-                var pick = FindHeadingStep(
-                    px, pz, hx, hz, noise, halfX, halfZ,
-                    sizeX, sizeZ, used, lastCxi, lastCzi);
-                if (!pick.HasValue) break;
-
-                var (rx, rz) = pick.Value;
-                px += rx;
-                pz += rz;
-                hPrevX = rx;
-                hPrevZ = rz;
+                committed = TryPlanRiver(noise, sizeX, sizeZ, halfX, halfZ,
+                    used, xiS, ziS, xiE, ziE);
             }
+            if (committed == null) continue;
 
-            // Net-direction flow is retained for consumers that only need
-            // a single scalar (e.g. water-wheel orientation defaults).
-            // Renderers that want per-cell tangent should derive it from
-            // the neighboring cells in the Cells list — net direction
-            // doesn't reflect local bends.
-            var flowDx = Math.Sign(xiE - xiS);
-            var flowDz = Math.Sign(ziE - ziS);
-            paths.Add(new RiverPath(cells, flowDx, flowDz));
+            foreach (var c in committed.Cells)
+            {
+                var xi = c.X + halfX;
+                var zi = c.Z + halfZ;
+                if ((uint)xi < (uint)sizeX && (uint)zi < (uint)sizeZ)
+                    used[xi, zi] = true;
+            }
+            paths.Add(committed);
         }
         return paths;
     }
 
+    // Run a continuous-walker attempt from start to end. Returns the
+    // completed RiverPath only when the walker reaches Chebyshev radius
+    // 1 of the endpoint without being pinned. On failure (pinned or
+    // budget exhausted), returns null so the caller can re-roll the
+    // endpoints. Cells claimed during the attempt are recorded only in
+    // the local selfCells set; the shared `used` mask is never mutated
+    // here — the caller commits on success.
+    private static RiverPath? TryPlanRiver(
+        NoiseStack noise, int sizeX, int sizeZ, int halfX, int halfZ,
+        bool[,] used, int xiS, int ziS, int xiE, int ziE)
+    {
+        var cells = new List<(int X, int Z)>();
+        var selfCells = new HashSet<int>();
+        var px = xiS + 0.5f;
+        var pz = ziS + 0.5f;
+        var hPrevX = 0f;
+        var hPrevZ = 0f;
+        var lastCxi = int.MinValue;
+        var lastCzi = int.MinValue;
+        var manhattan = Math.Abs(xiE - xiS) + Math.Abs(ziE - ziS);
+        var maxSteps = (int)(manhattan * RiverBudgetMultiplier) + RiverWalkSlack;
+        var reachedEnd = false;
+        for (var step = 0; step < maxSteps; step++)
+        {
+            var cxi = (int)MathF.Floor(px);
+            var czi = (int)MathF.Floor(pz);
+            if ((uint)cxi < (uint)sizeX && (uint)czi < (uint)sizeZ
+                && (cxi != lastCxi || czi != lastCzi))
+            {
+                // FindHeadingStep already rejects used / self-cross, so a
+                // collision here means the start cell itself overlaps —
+                // bail rather than record a conflict.
+                if (used[cxi, czi]) return null;
+                cells.Add((cxi - halfX, czi - halfZ));
+                selfCells.Add(cxi * sizeZ + czi);
+                lastCxi = cxi;
+                lastCzi = czi;
+            }
+            if (Math.Max(Math.Abs(xiE - cxi), Math.Abs(ziE - czi)) <= 1)
+            {
+                reachedEnd = true;
+                break;
+            }
+
+            var dxGoal = xiE - cxi;
+            var dzGoal = ziE - czi;
+            var chebLeft = Math.Max(Math.Abs(dxGoal), Math.Abs(dzGoal));
+            var remaining = Math.Max(1, maxSteps - step);
+            var urgencyRaw = chebLeft / (float)remaining;
+            var urgency = Smoothstep(0.35f, 1.0f, urgencyRaw);
+
+            var mAng = noise.Meander.GetNoise(px, pz) * MathF.PI;
+            var mdx = MathF.Cos(mAng);
+            var mdz = MathF.Sin(mAng);
+
+            var goalLen = MathF.Sqrt(dxGoal * dxGoal + dzGoal * dzGoal);
+            var gdx = goalLen > 0f ? dxGoal / goalLen : 0f;
+            var gdz = goalLen > 0f ? dzGoal / goalLen : 0f;
+
+            var goalW = RiverGoalBaseBias + urgency * RiverGoalUrgencyBoost;
+            var hx = mdx + goalW * gdx + RiverWalkerMomentum * hPrevX;
+            var hz = mdz + goalW * gdz + RiverWalkerMomentum * hPrevZ;
+            var hMag = MathF.Sqrt(hx * hx + hz * hz);
+            if (hMag > 1e-6f) { hx /= hMag; hz /= hMag; }
+            else { hx = gdx; hz = gdz; }
+
+            var pick = FindHeadingStep(
+                px, pz, hx, hz, noise, halfX, halfZ,
+                sizeX, sizeZ, used, selfCells, lastCxi, lastCzi);
+            if (!pick.HasValue) return null;
+
+            var (rx, rz) = pick.Value;
+            px += rx;
+            pz += rz;
+            hPrevX = rx;
+            hPrevZ = rz;
+        }
+
+        if (!reachedEnd) return null;
+        var flowDx = Math.Sign(xiE - xiS);
+        var flowDz = Math.Sign(ziE - ziS);
+        return new RiverPath(cells, flowDx, flowDz);
+    }
+
     // Continuous-walker heading pick. Returns a unit-length step vector
-    // landing in a legal cell, or null if no cell is reachable. Strategy
-    // is a widening-cone rotation search:
-    //   pass 0 → hard mountain block + non-crossing
-    //   pass 1 → hard mountain block, relax non-crossing
-    //   pass 2 → relax everything (last-resort, should be extremely rare)
-    // A "legal" cell is in bounds and, per-pass, not-mountain and/or not
-    // already claimed. Staying in the current cell is always legal since
-    // it's the walker's own starting cell for this step.
+    // landing in a legal cell, or null if no cell is reachable. Strict
+    // constraints — no fallback, no relaxation:
+    //   - not out of bounds
+    //   - not mountain (MountainMask < MountainOnset)
+    //   - not claimed by a prior river (used[,])
+    //   - not already part of this river's own path (selfCells)
+    // Staying in the walker's current cell is always legal since it's
+    // the walker's own starting cell for this step.
     private static (float rx, float rz)? FindHeadingStep(
         float px, float pz, float hx, float hz,
         NoiseStack noise, int halfX, int halfZ,
-        int sizeX, int sizeZ, bool[,] used,
+        int sizeX, int sizeZ, bool[,] used, HashSet<int> selfCells,
         int curCxi, int curCzi)
     {
-        for (var pass = 0; pass < 3; pass++)
+        foreach (var offset in RiverHeadingRotations)
         {
-            var enforceMountain = pass < 2;
-            var enforceUsed = pass < 1;
-            foreach (var offset in RiverHeadingRotations)
+            var c = MathF.Cos(offset);
+            var s = MathF.Sin(offset);
+            var nhx = hx * c - hz * s;
+            var nhz = hx * s + hz * c;
+            var nx = (int)MathF.Floor(px + nhx);
+            var nz = (int)MathF.Floor(pz + nhz);
+            if ((uint)nx >= (uint)sizeX || (uint)nz >= (uint)sizeZ) continue;
+            var stayingPut = nx == curCxi && nz == curCzi;
+            if (!stayingPut)
             {
-                var c = MathF.Cos(offset);
-                var s = MathF.Sin(offset);
-                var nhx = hx * c - hz * s;
-                var nhz = hx * s + hz * c;
-                var nx = (int)MathF.Floor(px + nhx);
-                var nz = (int)MathF.Floor(pz + nhz);
-                if ((uint)nx >= (uint)sizeX || (uint)nz >= (uint)sizeZ) continue;
-                var stayingPut = nx == curCxi && nz == curCzi;
-                if (enforceUsed && !stayingPut && used[nx, nz]) continue;
-                if (enforceMountain)
-                {
-                    var wx = nx - halfX;
-                    var wz = nz - halfZ;
-                    var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
-                    if (maskRaw >= MountainOnset) continue;
-                }
-                return (nhx, nhz);
+                if (used[nx, nz]) continue;
+                if (selfCells.Contains(nx * sizeZ + nz)) continue;
             }
+            var wx = nx - halfX;
+            var wz = nz - halfZ;
+            var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
+            if (maskRaw >= MountainOnset) continue;
+            return (nhx, nhz);
         }
         return null;
     }
