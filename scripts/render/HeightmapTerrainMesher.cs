@@ -16,9 +16,11 @@ namespace CowColonySim.Render;
 /// Kinds:
 ///  - <see cref="TileKind.Floor"/> → grass (cell 0..6, hashed by world XZ)
 ///  - <see cref="TileKind.Sand"/>  → sand (cell 15)
-///  - <see cref="TileKind.Water"/> → white cell + water tint; top Y drops by
-///    <c>WaterTopDropMeters</c> so the shore reads as a step above the
-///    waterline.
+///  - <see cref="TileKind.Water"/> → lake bed. Renders as a sand top + sand
+///    cliff walls (the basin geometry) plus a flat water-plane quad at
+///    <c>WaterLevelY - WaterTopDropMeters</c> covering the tile's XZ extent.
+///    Water is flat across the whole lake; depth is the gap between bed and
+///    plane.
 /// Any other kind (Solid, Empty) is skipped.
 /// </summary>
 public sealed class HeightmapTerrainMesher
@@ -42,20 +44,25 @@ public sealed class HeightmapTerrainMesher
         for (var lx = 0; lx < s; lx++)
         for (var lz = 0; lz < s; lz++)
         {
-            var kind = (TileKind)snap.Kinds[lx, lz];
-            if (kind != TileKind.Floor && kind != TileKind.Sand && kind != TileKind.Water)
+            var rawKind = (TileKind)snap.Kinds[lx, lz];
+            if (rawKind != TileKind.Floor && rawKind != TileKind.Sand && rawKind != TileKind.Water)
                 continue;
+
+            // Water columns render with sand bed geometry + a separate flat
+            // water plane overlay. Keep rawKind for the overlay decision;
+            // topKind drives top + wall texture.
+            var isWater = rawKind == TileKind.Water;
+            var topKind = isWater ? TileKind.Sand : rawKind;
 
             var hSW = snap.Corners[lx, lz, TerrainChunk.SW];
             var hSE = snap.Corners[lx, lz, TerrainChunk.SE];
             var hNE = snap.Corners[lx, lz, TerrainChunk.NE];
             var hNW = snap.Corners[lx, lz, TerrainChunk.NW];
 
-            var waterDrop = kind == TileKind.Water ? WaterTopDropMeters : 0f;
-            var ySW = hSW * th - waterDrop;
-            var ySE = hSE * th - waterDrop;
-            var yNE = hNE * th - waterDrop;
-            var yNW = hNW * th - waterDrop;
+            var ySW = hSW * th;
+            var ySE = hSE * th;
+            var yNE = hNE * th;
+            var yNW = hNW * th;
 
             var x0 = chunkBaseX + lx * tw;
             var z0 = chunkBaseZ + lz * tw;
@@ -64,9 +71,9 @@ public sealed class HeightmapTerrainMesher
 
             var wx = snap.ChunkX * s + lx;
             var wz = snap.ChunkZ * s + lz;
-            var cell = TileAtlas.CellForTop(kind, wx, wz);
+            var cell = TileAtlas.CellForTop(topKind, wx, wz);
             var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-            var tint = TileAtlas.TintFor(kind);
+            var tint = TileAtlas.TintFor(topKind);
 
             var vi = verts.Count;
             var pSW = new Vector3(x0, ySW, z0);
@@ -109,18 +116,14 @@ public sealed class HeightmapTerrainMesher
                 eSW = snap.EastRim[lz, 0];
                 eNW = snap.EastRim[lz, 1];
             }
-            // Water tiles drop their top by WaterTopDropMeters; walls need
-            // to match that drop for water-vs-water seams or match the
-            // neighbor's (undropped) Y for water-vs-land seams. Simplest:
-            // apply my own waterDrop to my top edge and none to the rim.
             EmitWallIfGap(
                 verts, normals, colors, uvs, indices,
-                topA: new Vector3(x1, hSE * th - waterDrop, z0),
-                topB: new Vector3(x1, hNE * th - waterDrop, z1),
+                topA: new Vector3(x1, hSE * th, z0),
+                topB: new Vector3(x1, hNE * th, z1),
                 botA: new Vector3(x1, eSW * th, z0),
                 botB: new Vector3(x1, eNW * th, z1),
                 faceDirPlus: new Vector3(1f, 0f, 0f),
-                kind);
+                topKind);
 
             short nSW, nSE;
             if (lz + 1 < s)
@@ -135,12 +138,18 @@ public sealed class HeightmapTerrainMesher
             }
             EmitWallIfGap(
                 verts, normals, colors, uvs, indices,
-                topA: new Vector3(x1, hNE * th - waterDrop, z1),
-                topB: new Vector3(x0, hNW * th - waterDrop, z1),
+                topA: new Vector3(x1, hNE * th, z1),
+                topB: new Vector3(x0, hNW * th, z1),
                 botA: new Vector3(x1, nSE * th, z1),
                 botB: new Vector3(x0, nSW * th, z1),
                 faceDirPlus: new Vector3(0f, 0f, 1f),
-                kind);
+                topKind);
+
+            if (isWater)
+            {
+                EmitWaterPlane(verts, normals, colors, uvs, indices,
+                    x0, z0, x1, z1, wx, wz);
+            }
         }
 
         if (indices.Count == 0) return null;
@@ -197,6 +206,37 @@ public sealed class HeightmapTerrainMesher
         // else: either flat (no gap) or a twisted corner (one side self-upper,
         // other side self-lower). Skip twisted corners — pathological edge
         // case not produced by the Cap rule on well-formed worldgen.
+    }
+
+    // Flat water-plane quad at WaterLevelY - WaterTopDropMeters. One per
+    // lake tile; they abut across shared edges so the combined surface reads
+    // as a single continuous water plane pooling inside the basin.
+    private static void EmitWaterPlane(
+        List<Vector3> verts, List<Vector3> normals, List<Color> colors,
+        List<Vector2> uvs, List<int> indices,
+        float x0, float z0, float x1, float z1, int wx, int wz)
+    {
+        const float th = SimConstants.TileHeightMeters;
+        var wY = WorldGen.WaterLevelY * th - WaterTopDropMeters;
+
+        var cell = TileAtlas.CellForTop(TileKind.Water, wx, wz);
+        var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
+        var tint = TileAtlas.TintFor(TileKind.Water);
+
+        var vi = verts.Count;
+        verts.Add(new Vector3(x0, wY, z0));
+        verts.Add(new Vector3(x1, wY, z0));
+        verts.Add(new Vector3(x1, wY, z1));
+        verts.Add(new Vector3(x0, wY, z1));
+        normals.Add(Vector3.Up); normals.Add(Vector3.Up);
+        normals.Add(Vector3.Up); normals.Add(Vector3.Up);
+        colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
+        uvs.Add(new Vector2(u0, v0));
+        uvs.Add(new Vector2(u1, v0));
+        uvs.Add(new Vector2(u1, v1));
+        uvs.Add(new Vector2(u0, v1));
+        indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
+        indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
     }
 
     private static void EmitCliffQuad(

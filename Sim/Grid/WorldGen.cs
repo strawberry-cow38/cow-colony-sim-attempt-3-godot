@@ -95,7 +95,11 @@ public static class WorldGen
                 }
 
                 // Detail pass. Capped < CliffDelta so flat plains never spike.
-                var detail = noise.Detail.GetNoise(x, z) * DetailAmplitude;
+                // Muted on mountain plateaus (scaled by 1 - mountainWeight) so
+                // quantized tiers stay dead flat — no fuzz on cliff tops.
+                var detail = noise.Detail.GetNoise(x, z)
+                             * DetailAmplitude
+                             * (1f - mountainWeight);
 
                 // Lake carve. Mask-weighted pull toward a negative floor only
                 // when base is low enough to sit near sea level AND mountain
@@ -132,8 +136,11 @@ public static class WorldGen
 
             // Shore detection: a land column within 2 tiles of sea level with
             // any submerged 8-neighbor is painted sand instead of grass.
+            // Lake-bed columns (height < WaterLevelY) are always sand — the
+            // water plane renders separately on top.
+            var isLakeBed = height < WaterLevelY;
             var isShore = false;
-            if (height >= WaterLevelY && height <= WaterLevelY + 2)
+            if (!isLakeBed && height <= WaterLevelY + 2)
             {
                 for (var dz = -1; dz <= 1 && !isShore; dz++)
                 for (var dx = -1; dx <= 1 && !isShore; dx++)
@@ -146,19 +153,23 @@ public static class WorldGen
                 }
             }
 
+            var floorTile = (isLakeBed || isShore) ? sand : grass;
             var rockBase = Math.Min(0, height - 3);
             for (var y = rockBase; y < height - 1; y++)
             {
                 tiles.Set(new TilePos(x, y, z), solid);
             }
-            tiles.Set(new TilePos(x, height - 1, z), isShore ? sand : grass);
+            tiles.Set(new TilePos(x, height - 1, z), floorTile);
             for (var y = height; y < WaterLevelY; y++)
             {
                 tiles.Set(new TilePos(x, y, z), water);
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            var surfaceKind = height < WaterLevelY
+            // Lake-bed columns tag kind = Water to signal the mesher to emit
+            // a water-plane overlay at WaterLevelY; the bed itself still
+            // renders with sand top + walls.
+            var surfaceKind = isLakeBed
                 ? TileKind.Water
                 : (isShore ? TileKind.Sand : TileKind.Floor);
             tiles.SetTerrainKind(x, z, surfaceKind);
