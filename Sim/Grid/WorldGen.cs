@@ -35,10 +35,21 @@ public static class WorldGen
     // terminate, guaranteeing no river↔lake overlap.
     private const int   RiverSampleStride      = 18;
     private const float RiverSourceThreshold   = 0.58f;
-    private const int   RiverSourceMinH        = 10;
-    private const int   RiverSourceMaxH        = 55;
+    // Sources live in lowlands so a walk always has sea-level neighbors to
+    // aim at. Flat rivers (water surface at WaterLevelY everywhere) only
+    // make sense if the entire carved channel already sits near sea level.
+    private const int   RiverSourceMinH        = 1;
+    private const int   RiverSourceMaxH        = 8;
     private const int   RiverMaxWalkSteps      = 4096;
     private const float RiverMeanderWeight     = 2.2f;
+    // Disc half-width of the carved bed. Min 2 = 5-tile diameter (master
+    // requirement). Max 4 so trunks downstream fatten into 9-wide channels.
+    private const int   RiverMinWidthR         = 2;
+    private const int   RiverMaxWidthR         = 4;
+    // How many outer retry passes the carve loop runs. Each pass commits
+    // paths that can now reach a valid endpoint (lake / ocean / previously
+    // committed flow). Five passes handle tributary chains five deep.
+    private const int   RiverMergePasses       = 5;
 
     // Bank-smoothing pass. After carve, river beds sit below sea level with
     // abrupt cliffs on their dry neighbors. A corridor of BankSmoothRadius
@@ -46,9 +57,11 @@ public static class WorldGen
     // 3×3 box average — but only in the lowering direction, so we can never
     // push mountains or lake beds around. Heights above BankMaxBaseH are
     // excluded entirely so mountain flanks near shorelines stay untouched.
-    private const int BankSmoothRadius     = 4;
-    private const int BankSmoothIterations = 3;
-    private const int BankMaxBaseH         = 10;
+    // The same pass covers river banks AND lake/pond banks since both are
+    // identified by sub-sea-level columns.
+    private const int BankSmoothRadius     = 8;
+    private const int BankSmoothIterations = 6;
+    private const int BankMaxBaseH         = 18;
 
     // Detail noise amplitude. Low enough that plains and hills read as
     // gently rolling rather than jagged.
@@ -239,25 +252,25 @@ public static class WorldGen
         return surfaceTiles;
     }
 
-    // Seed rivers on a coarse grid, walk each source downhill with a meander
-    // bias, accumulate flow per cell, then carve the river bed. Paths that
-    // step onto a lake cell terminate (no river↔lake overlap). Width and
-    // depth scale with accumulated flow so merged tributaries read as a
-    // bigger river downstream.
+    // Seed sources on a coarse grid, walk each downhill to a valid endpoint
+    // (lake / ocean / existing river flow), and only commit paths that
+    // terminated validly — no half-carved trenches. A retry loop re-tries
+    // unresolved sources so tributaries merge into mains committed in an
+    // earlier pass. Width scales with accumulated flow but never drops
+    // below RiverMinWidthR so every river is at least 5 tiles wide.
     private static int[,] CarveRivers(
         int[,] heights, bool[,] isLake, NoiseStack noise,
         int sizeX, int sizeZ, int halfX, int halfZ, int minHeight)
     {
         var flow = new int[sizeX, sizeZ];
-        var visited = new int[sizeX, sizeZ];      // generation per walk
-        var gen = 0;
         int[] dxs = { -1, 0, 1, -1, 1, -1, 0, 1 };
         int[] dzs = { -1, -1, -1, 0, 0, 1, 1, 1 };
 
+        // Gather sources across the grid.
+        var sources = new List<(int xi, int zi)>();
         for (var sxi = RiverSampleStride / 2; sxi < sizeX; sxi += RiverSampleStride)
         for (var szi = RiverSampleStride / 2; szi < sizeZ; szi += RiverSampleStride)
         {
-            // Find the strongest source candidate inside this grid cell.
             var bestXi = -1; var bestZi = -1; var bestScore = float.NegativeInfinity;
             var lo = -RiverSampleStride / 2;
             var hi = RiverSampleStride / 2;
@@ -275,60 +288,82 @@ public static class WorldGen
                 var score = r + h * 0.001f;
                 if (score > bestScore) { bestScore = score; bestXi = xi; bestZi = zi; }
             }
-            if (bestXi < 0) continue;
+            if (bestXi >= 0) sources.Add((bestXi, bestZi));
+        }
 
-            gen++;
-            var cxi = bestXi; var czi = bestZi;
-            for (var step = 0; step < RiverMaxWalkSteps; step++)
+        // Retry loop: walks that terminate at an existing-flow cell depend on
+        // that main river having been committed in an earlier pass. Re-run
+        // pending sources until no new path commits in a pass.
+        var visited = new int[sizeX, sizeZ];
+        var pending = new List<(int, int)>(sources);
+        var pathBuf = new List<(int, int)>(RiverMaxWalkSteps);
+
+        for (var pass = 0; pass < RiverMergePasses; pass++)
+        {
+            var progress = false;
+            for (var i = pending.Count - 1; i >= 0; i--)
             {
-                if (visited[cxi, czi] == gen) break;
-                visited[cxi, czi] = gen;
-                flow[cxi, czi]++;
-                if (isLake[cxi, czi]) break;
+                var (sxi, szi) = pending[i];
+                pathBuf.Clear();
+                var cxi = sxi; var czi = szi;
+                var valid = false;
+                var selfGen = pass * sources.Count + i + 1;
 
-                var wx = cxi - halfX; var wz = czi - halfZ;
-                var mAng = (noise.Meander.GetNoise(wx, wz) + 1f) * MathF.PI;
-                var pdx = MathF.Cos(mAng);
-                var pdz = MathF.Sin(mAng);
-
-                var curH = heights[cxi, czi];
-                var bestK = -1; var bestKScore = float.PositiveInfinity;
-                var bestKH = 0;
-                for (var k = 0; k < 8; k++)
+                for (var step = 0; step < RiverMaxWalkSteps; step++)
                 {
-                    var nxi = cxi + dxs[k]; var nzi = czi + dzs[k];
-                    if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
-                    if (visited[nxi, nzi] == gen) continue;
-                    var nh = heights[nxi, nzi];
-                    var invLen = 1f / MathF.Sqrt(dxs[k] * dxs[k] + dzs[k] * dzs[k]);
-                    var align = (dxs[k] * pdx + dzs[k] * pdz) * invLen;
-                    var score = nh - align * RiverMeanderWeight;
-                    if (score < bestKScore) { bestKScore = score; bestK = k; bestKH = nh; }
+                    if (isLake[cxi, czi]) { valid = true; break; }
+                    if (flow[cxi, czi] > 0) { valid = true; break; }
+                    if (visited[cxi, czi] == selfGen) break;
+                    visited[cxi, czi] = selfGen;
+                    pathBuf.Add((cxi, czi));
+
+                    var wx = cxi - halfX; var wz = czi - halfZ;
+                    var mAng = (noise.Meander.GetNoise(wx, wz) + 1f) * MathF.PI;
+                    var pdx = MathF.Cos(mAng);
+                    var pdz = MathF.Sin(mAng);
+
+                    var curH = heights[cxi, czi];
+                    var bestK = -1; var bestKScore = float.PositiveInfinity;
+                    var bestKH = 0;
+                    for (var k = 0; k < 8; k++)
+                    {
+                        var nxi = cxi + dxs[k]; var nzi = czi + dzs[k];
+                        if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                        if (visited[nxi, nzi] == selfGen) continue;
+                        var nh = heights[nxi, nzi];
+                        var invLen = 1f / MathF.Sqrt(dxs[k] * dxs[k] + dzs[k] * dzs[k]);
+                        var align = (dxs[k] * pdx + dzs[k] * pdz) * invLen;
+                        var score = nh - align * RiverMeanderWeight;
+                        if (score < bestKScore) { bestKScore = score; bestK = k; bestKH = nh; }
+                    }
+                    if (bestK < 0) break;
+                    if (bestKH > curH + 2) break;
+                    cxi += dxs[bestK];
+                    czi += dzs[bestK];
                 }
-                if (bestK < 0) break;
-                // Local minimum: neighbor noticeably higher means we're stuck in
-                // a pit. End the river rather than flooding uphill.
-                if (bestKH > curH + 2) break;
-                cxi += dxs[bestK];
-                czi += dzs[bestK];
+
+                if (valid)
+                {
+                    foreach (var (px, pz) in pathBuf) flow[px, pz]++;
+                    pending.RemoveAt(i);
+                    progress = true;
+                }
             }
+            if (!progress) break;
         }
 
         // Carve. For each cell with flow, drop height below sea level and
-        // stamp a small disk for width. Skip lake cells so rivers never
-        // overwrite them. Gated on lowland (same LakeMaxBaseH threshold as
-        // the lake carve) so rivers only become visible near water level —
-        // upstream cells still accumulate flow but keep their terrain so
-        // bank cliffs stay bounded.
+        // stamp a disc for width. Skip lake cells so rivers never overwrite
+        // them. No lowland gate — the carve runs wherever flow accumulated,
+        // so the river trench is uninterrupted along its full length.
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
             var f = flow[xi, zi];
             if (f <= 0) continue;
             if (isLake[xi, zi]) continue;
-            if (heights[xi, zi] > LakeMaxBaseH) continue;
 
-            var widthR = Math.Min(3, f / 2);
+            var widthR = Math.Clamp(RiverMinWidthR + f / 4, RiverMinWidthR, RiverMaxWidthR);
             var depth = Math.Min(3, 1 + f / 4);
             var floorH = WaterLevelY - depth;
             if (floorH < minHeight) floorH = minHeight;
@@ -340,7 +375,6 @@ public static class WorldGen
                 var nxi = xi + dx; var nzi = zi + dz;
                 if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
                 if (isLake[nxi, nzi]) continue;
-                if (heights[nxi, nzi] > LakeMaxBaseH) continue;
                 if (heights[nxi, nzi] <= floorH) continue;
                 heights[nxi, nzi] = floorH;
             }
