@@ -176,6 +176,25 @@ public sealed class TileWorld
         MutationTick++;
     }
 
+    /// <summary>
+    /// Water-surface Y at tile (x, z) in tile-height units. Meaningful only
+    /// when the tile's kind is <see cref="TileKind.Water"/>; other kinds
+    /// return the raw value (default 0). Rivers at elevation write a local
+    /// surface height; lakes / ocean keep the default 0 = sea level.
+    /// </summary>
+    public short WaterTopAt(int x, int z)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.WaterTops[lx, lz] : (short)0;
+    }
+
+    public void SetWaterTop(int x, int z, short y)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetWaterTop(lx, lz, y);
+        MutationTick++;
+    }
+
     public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 
@@ -199,6 +218,7 @@ public sealed class TileWorld
             snap.Corners[lx, lz, TerrainChunk.NE] = tc.Corners[lx, lz, TerrainChunk.NE];
             snap.Corners[lx, lz, TerrainChunk.NW] = tc.Corners[lx, lz, TerrainChunk.NW];
             snap.Kinds[lx, lz] = tc.Kinds[lx, lz];
+            snap.WaterTops[lx, lz] = tc.WaterTops[lx, lz];
         }
         _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
         _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);

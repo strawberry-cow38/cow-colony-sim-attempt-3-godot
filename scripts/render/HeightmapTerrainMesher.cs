@@ -158,8 +158,12 @@ public sealed class HeightmapTerrainMesher
 
             if (isWater)
             {
+                // Per-tile water-top: rivers at elevation write their local
+                // surface height; lakes / ocean leave it at 0 = sea level.
+                var waterTopTile = snap.WaterTops[lx, lz];
+                var waterTopY = (waterTopTile != 0 ? waterTopTile : (short)WorldGen.WaterLevelY);
                 EmitWaterPlane(wVerts, wNormals, wColors, wUvs, wIndices,
-                    x0, z0, x1, z1, wx, wz);
+                    x0, z0, x1, z1, wx, wz, waterTopY);
             }
         }
 
@@ -224,16 +228,19 @@ public sealed class HeightmapTerrainMesher
         // case not produced by the Cap rule on well-formed worldgen.
     }
 
-    // Flat water-plane quad at WaterLevelY - WaterTopDropMeters. One per
-    // lake tile; they abut across shared edges so the combined surface reads
-    // as a single continuous water plane pooling inside the basin.
+    // Flat water-plane quad at `waterTopY - WaterTopDropMeters`. One per
+    // water tile; adjacent tiles with matching waterTopY abut across shared
+    // edges so the combined surface reads as a single continuous plane.
+    // Rivers at elevation pass their local waterTopY here; lakes / ocean
+    // pass WaterLevelY so the global sea surface stays flat.
     private static void EmitWaterPlane(
         List<Vector3> verts, List<Vector3> normals, List<Color> colors,
         List<Vector2> uvs, List<int> indices,
-        float x0, float z0, float x1, float z1, int wx, int wz)
+        float x0, float z0, float x1, float z1, int wx, int wz,
+        short waterTopY)
     {
         const float th = SimConstants.TileHeightMeters;
-        var wY = WorldGen.WaterLevelY * th - WaterTopDropMeters;
+        var wY = waterTopY * th - WaterTopDropMeters;
 
         var cell = TileAtlas.CellForTop(TileKind.Water, wx, wz);
         var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);

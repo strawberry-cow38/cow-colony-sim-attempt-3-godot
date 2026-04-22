@@ -44,6 +44,15 @@ public sealed class TerrainChunk
     /// </summary>
     public readonly byte[,] Kinds = new byte[Size, Size];
 
+    /// <summary>
+    /// Per-column water-surface Y in tile-height units. Only meaningful when
+    /// <see cref="Kinds"/> is <see cref="TileKind.Water"/>; otherwise ignored.
+    /// Default 0 means the global sea level (<c>WorldGen.WaterLevelY</c>).
+    /// Rivers at elevation overwrite this with their local water-top so the
+    /// mesher can emit water planes that actually sit on the river bed.
+    /// </summary>
+    public readonly short[,] WaterTops = new short[Size, Size];
+
     public int Revision { get; private set; }
 
     public void SetColumnHeight(int lx, int lz, short h)
@@ -71,6 +80,13 @@ public sealed class TerrainChunk
     {
         if (Kinds[lx, lz] == kind) return;
         Kinds[lx, lz] = kind;
+        Revision++;
+    }
+
+    public void SetWaterTop(int lx, int lz, short y)
+    {
+        if (WaterTops[lx, lz] == y) return;
+        WaterTops[lx, lz] = y;
         Revision++;
     }
 }
