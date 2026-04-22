@@ -50,7 +50,7 @@ public sealed partial class GridRenderer : Node3D
 
     private readonly ConcurrentQueue<(TilePos Key, MeshBuildResult? Result, int Lod)> _completedChunk = new();
     private readonly ConcurrentQueue<(TilePos Key, int GroupSize, MeshBuildResult? Result, int Lod, long MaskHash)> _completedGroup = new();
-    private readonly ConcurrentQueue<(TilePos Key, int GroupSize, NaiveChunkMesher.HeightmapPatch? Patch, int Lod, long MaskHash)> _completedGpuGroup = new();
+    private readonly ConcurrentQueue<(TilePos Key, int GroupSize, NaiveChunkMesher.CornerHeightmapPatch? Patch, int Lod, long MaskHash)> _completedGpuGroup = new();
     private readonly ConcurrentQueue<((int cx, int cz) Key, MeshBuildResult? Result, long RevHash)> _completedTerrain = new();
 
     private readonly NaiveChunkMesher _mesher = new();
@@ -137,9 +137,13 @@ public sealed partial class GridRenderer : Node3D
             _terrainShader = GD.Load<Shader>("res://scripts/render/shaders/terrain_heightmap.gdshader");
             var g8Width  = Group8  * Chunk.Size * TileCoord.TileW;
             var g4Width  = Group4  * Chunk.Size * TileCoord.TileW;
-            // G8 and G4 are stepped — matches blocky look of L0/L1 at tier boundaries.
-            _g8PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G8CellsPerSide, g8Width, Group8 * Chunk.Size);
-            _g4PatchMesh  = GpuTerrain.BuildPatchMeshStepped(G4CellsPerSide, g4Width, Group4 * Chunk.Size);
+            // Corner-heightmap stepped patch: 4 top verts per cell each
+            // sampling its own corner pixel in a 2x-density heightmap.
+            // Within-cell corner disagreement → ramp; between-cell → cliff.
+            var cornersSize = G4CellsPerSide * 2 + 2; // same for G8 since cellsPerSide matches
+            var kindsSize   = G4CellsPerSide + 2;
+            _g8PatchMesh  = GpuTerrain.BuildCornerPatchMeshStepped(G8CellsPerSide, g8Width, cornersSize, kindsSize);
+            _g4PatchMesh  = GpuTerrain.BuildCornerPatchMeshStepped(G4CellsPerSide, g4Width, cornersSize, kindsSize);
 
             if (!RenderingServer.GlobalShaderParameterGetList().Any(n => n.ToString() == "gimbal_pos"))
             {
@@ -405,9 +409,9 @@ public sealed partial class GridRenderer : Node3D
             else
             {
                 var tex = GpuTerrain.BuildHeightmapTexture(
-                    patch.Heights, patch.SizeX, patch.SizeZ, patch.MaxHeightMeters);
+                    patch.Corners, patch.CornersSize, patch.CornersSize, patch.MaxHeightMeters);
                 var kindTex = GpuTerrain.BuildKindmapTexture(
-                    patch.Kinds, patch.SizeX, patch.SizeZ);
+                    patch.Kinds, patch.KindsSize, patch.KindsSize);
                 slot.MeshInstance.Mesh = groupSize == Group4 ? _g4PatchMesh : _g8PatchMesh;
                 slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex, kindTex);
             }
@@ -665,6 +669,7 @@ public sealed partial class GridRenderer : Node3D
         int groupSize, int lod)
     {
         var patchMesh = groupSize == Group4 ? _g4PatchMesh! : _g8PatchMesh!;
+        var cellsPerSide = groupSize == Group4 ? G4CellsPerSide : G8CellsPerSide;
         var mutationTick = _simHost!.Tiles.MutationTick;
         foreach (var (groupKey, chunkKeys) in masks)
         {
@@ -682,26 +687,28 @@ public sealed partial class GridRenderer : Node3D
             if (slot.InFlight) continue;
             if (slot.LastCheckedMutationTick == mutationTick && slot.CurrentLod == lod) continue;
 
+            // Terrain is 2D (no Y stacking) — dedupe the mask's per-Y chunk
+            // keys to a unique (cx, cz) set for the group.
+            var uniqueCells = new HashSet<(int cx, int cz)>();
+            foreach (var ck in chunkKeys) uniqueCells.Add((ck.X, ck.Z));
+
             long maskHash = 0;
             long revHash = 0;
-            var yLevels = new HashSet<int>();
-            foreach (var ck in chunkKeys)
+            foreach (var (cx, cz) in uniqueCells)
             {
-                var chunk = _simHost!.Tiles.GetChunkOrNull(ck);
-                if (chunk == null) continue;
-                var lx = ck.X - groupKey.X;
-                var lz = ck.Z - groupKey.Z;
+                var tc = _simHost!.Tiles.GetTerrainChunkOrNull(cx, cz);
+                if (tc == null) continue;
+                var lx = cx - groupKey.X;
+                var lz = cz - groupKey.Z;
                 unchecked
                 {
-                    maskHash = maskHash * 31 + ((lx * groupSize + lz) * 1024 + ck.Y + 1);
-                    revHash += chunk.Revision;
+                    maskHash = maskHash * 31 + (lx * groupSize + lz);
+                    revHash += tc.Revision;
                 }
-                yLevels.Add(ck.Y);
             }
-            // Neighbor-border chunks feed border heights to the patch so group
-            // seams don't gap. Include them in maskHash/revHash so a neighbor
-            // edit retriggers this group's rebuild.
-            AccumulateBorderHash(yLevels, groupKey, groupSize, ref maskHash, ref revHash);
+            // Neighbor-border terrain chunks feed edge corner data to the patch
+            // so seam walls resolve without gaps.
+            AccumulateTerrainBorderHash(groupKey, groupSize, ref maskHash, ref revHash);
             if (slot.CurrentLod == lod && slot.UploadedRevision == revHash && slot.UploadedMaskHash == maskHash)
             {
                 slot.LastCheckedMutationTick = mutationTick;
@@ -710,16 +717,22 @@ public sealed partial class GridRenderer : Node3D
             ref var dispatchCount = ref (groupSize == Group4 ? ref _frameDispatchG4 : ref _frameDispatchG8);
             if (dispatchCount >= DispatchGroupBudget) continue;
 
-            var entries = new List<NaiveChunkMesher.GroupChunkEntry>(chunkKeys.Count);
-            foreach (var ck in chunkKeys)
+            var entries = new List<NaiveChunkMesher.TerrainGroupEntry>(uniqueCells.Count);
+            foreach (var (cx, cz) in uniqueCells)
             {
-                var chunk = _simHost!.Tiles.GetChunkOrNull(ck);
-                if (chunk == null) continue;
-                var lx = ck.X - groupKey.X;
-                var lz = ck.Z - groupKey.Z;
-                entries.Add(new NaiveChunkMesher.GroupChunkEntry(lx, lz, ck.Y, chunk.Snapshot()));
+                var snap = _simHost!.Tiles.SnapshotTerrain(cx, cz);
+                if (snap == null) continue;
+                var lx = cx - groupKey.X;
+                var lz = cz - groupKey.Z;
+                entries.Add(new NaiveChunkMesher.TerrainGroupEntry(lx, lz, snap));
             }
-            AppendBorderEntries(entries, yLevels, groupKey, groupSize);
+            AppendTerrainBorderEntries(entries, groupKey, groupSize);
+
+            if (entries.Count == 0)
+            {
+                slot.LastCheckedMutationTick = mutationTick;
+                continue;
+            }
 
             slot.InFlight = true;
             slot.RequestedRevision = revHash;
@@ -727,12 +740,13 @@ public sealed partial class GridRenderer : Node3D
             dispatchCount++;
             var key = groupKey;
             var size = groupSize;
+            var cellsCap = cellsPerSide;
             var maskHashCaptured = maskHash;
             var lodCaptured = lod;
             Task.Run(() =>
             {
                 var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                var patch = _mesher.BuildGroupHeightmapPatch(entries, size, lodCaptured);
+                var patch = _mesher.BuildGroupCornerPatch(entries, size, cellsCap, lodCaptured);
                 var ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
                 Profiler.RecordMs(size == Group4 ? "Build G4 GPU" : "Build G8 GPU", ms);
                 _completedGpuGroup.Enqueue((key, size, patch, lodCaptured, maskHashCaptured));
@@ -744,82 +758,59 @@ public sealed partial class GridRenderer : Node3D
         }
     }
 
-    // Iterate chunk keys around the whole border of a group (±X, ±Z, and the
-    // four diagonal corners), one per (lateral, Y) position, at the group's
-    // existing Y levels. Local coords use Lx/Lz = -1 for the -X / -Z border
-    // and Lx/Lz = groupSize for +X / +Z — BuildGroupHeightmapPatch decodes
-    // both to the texture-border slot for that side.
-    private void ForEachBorderChunk(HashSet<int> yLevels, TilePos groupKey, int groupSize,
-        System.Action<int, int, int, Chunk> visit)
+    // Iterate terrain chunks around the whole border of a group (+X/-X/+Z/-Z
+    // edges and the four diagonal corners). Unlike the voxel variant, terrain
+    // chunks are 2D so there are no Y levels to loop.
+    private void ForEachBorderTerrainChunk(TilePos groupKey, int groupSize,
+        System.Action<int, int, TerrainChunk> visit)
     {
         for (var cz = 0; cz < groupSize; cz++)
-        foreach (var y in yLevels)
         {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z + cz));
-            if (c != null) visit(groupSize, cz, y, c);
-        }
-        for (var cz = 0; cz < groupSize; cz++)
-        foreach (var y in yLevels)
-        {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X - 1, y, groupKey.Z + cz));
-            if (c != null) visit(-1, cz, y, c);
+            var px = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X + groupSize, groupKey.Z + cz);
+            if (px != null) visit(groupSize, cz, px);
+            var nx = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X - 1, groupKey.Z + cz);
+            if (nx != null) visit(-1, cz, nx);
         }
         for (var cx = 0; cx < groupSize; cx++)
-        foreach (var y in yLevels)
         {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + cx, y, groupKey.Z + groupSize));
-            if (c != null) visit(cx, groupSize, y, c);
+            var pz = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X + cx, groupKey.Z + groupSize);
+            if (pz != null) visit(cx, groupSize, pz);
+            var nz = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X + cx, groupKey.Z - 1);
+            if (nz != null) visit(cx, -1, nz);
         }
-        for (var cx = 0; cx < groupSize; cx++)
-        foreach (var y in yLevels)
-        {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + cx, y, groupKey.Z - 1));
-            if (c != null) visit(cx, -1, y, c);
-        }
-        foreach (var y in yLevels)
-        {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z + groupSize));
-            if (c != null) visit(groupSize, groupSize, y, c);
-        }
-        foreach (var y in yLevels)
-        {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X - 1, y, groupKey.Z + groupSize));
-            if (c != null) visit(-1, groupSize, y, c);
-        }
-        foreach (var y in yLevels)
-        {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X + groupSize, y, groupKey.Z - 1));
-            if (c != null) visit(groupSize, -1, y, c);
-        }
-        foreach (var y in yLevels)
-        {
-            var c = _simHost!.Tiles.GetChunkOrNull(new TilePos(groupKey.X - 1, y, groupKey.Z - 1));
-            if (c != null) visit(-1, -1, y, c);
-        }
+        var c1 = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X + groupSize, groupKey.Z + groupSize);
+        if (c1 != null) visit(groupSize, groupSize, c1);
+        var c2 = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X - 1, groupKey.Z + groupSize);
+        if (c2 != null) visit(-1, groupSize, c2);
+        var c3 = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X + groupSize, groupKey.Z - 1);
+        if (c3 != null) visit(groupSize, -1, c3);
+        var c4 = _simHost!.Tiles.GetTerrainChunkOrNull(groupKey.X - 1, groupKey.Z - 1);
+        if (c4 != null) visit(-1, -1, c4);
     }
 
-    private void AccumulateBorderHash(HashSet<int> yLevels, TilePos groupKey, int groupSize,
+    private void AccumulateTerrainBorderHash(TilePos groupKey, int groupSize,
         ref long maskHash, ref long revHash)
     {
         long mh = maskHash, rh = revHash;
         var stride = groupSize + 2;
-        ForEachBorderChunk(yLevels, groupKey, groupSize, (lx, lz, y, c) =>
+        ForEachBorderTerrainChunk(groupKey, groupSize, (lx, lz, c) =>
         {
             unchecked
             {
-                mh = mh * 31 + (((lx + 1) * stride + (lz + 1)) * 1024 + y + 1);
+                mh = mh * 31 + ((lx + 1) * stride + (lz + 1));
                 rh += c.Revision;
             }
         });
         maskHash = mh; revHash = rh;
     }
 
-    private void AppendBorderEntries(List<NaiveChunkMesher.GroupChunkEntry> entries,
-        HashSet<int> yLevels, TilePos groupKey, int groupSize)
+    private void AppendTerrainBorderEntries(List<NaiveChunkMesher.TerrainGroupEntry> entries,
+        TilePos groupKey, int groupSize)
     {
-        ForEachBorderChunk(yLevels, groupKey, groupSize, (lx, lz, y, c) =>
+        ForEachBorderTerrainChunk(groupKey, groupSize, (lx, lz, c) =>
         {
-            entries.Add(new NaiveChunkMesher.GroupChunkEntry(lx, lz, y, c.Snapshot()));
+            var snap = _simHost!.Tiles.SnapshotTerrain(groupKey.X + lx, groupKey.Z + lz);
+            if (snap != null) entries.Add(new NaiveChunkMesher.TerrainGroupEntry(lx, lz, snap));
         });
     }
 

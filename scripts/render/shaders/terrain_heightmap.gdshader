@@ -20,7 +20,11 @@ render_mode cull_disabled, specular_disabled, shadows_disabled;
 // edges).
 global uniform vec3 gimbal_pos;
 
-uniform sampler2D heightmap : hint_default_black, filter_linear, repeat_disable;
+// Corner heightmap: 2x-density R8 where each cell owns 4 pixels (SW/SE/NW/NE
+// arrangement) so ramps emerge within a cell when its 4 corners disagree, and
+// cliffs emerge between cells when facing corners disagree. Nearest filter
+// mandatory — linear interpolation would blur cliffs into ramps.
+uniform sampler2D heightmap : hint_default_black, filter_nearest, repeat_disable;
 // Per-cell TileKind byte (see Sim/Grid/Tile.cs). Nearest filter because the
 // value is an enum — linear interpolation at cell borders would dream up
 // nonexistent kinds. 1=Solid, 2=Floor(grass), 3=Water, 4=Sand.
@@ -60,15 +64,16 @@ uniform vec4 tint : source_color = vec4(0.7, 0.7, 0.7, 1.0);
 varying vec3 v_local_pos;
 varying vec3 v_world_pos;
 varying vec2 v_uv_local;
+varying vec2 v_kind_uv;
 
 float sample_height(vec2 uv_local) {
 	// uv_local: [0..1] over patch.
 	return texture(heightmap, uv_local).r * height_scale_m;
 }
 
-float sample_kind(vec2 uv_local) {
+float sample_kind(vec2 kind_uv) {
 	// kindmap is R8 unorm storing TileKind byte; decode back to [0..255].
-	return texture(kindmap, uv_local).r * 255.0;
+	return texture(kindmap, kind_uv).r * 255.0;
 }
 
 // Interleaved Gradient Noise (Jimenez). Approximates blue-noise spectrum from
@@ -81,19 +86,24 @@ float ign(vec2 p) {
 }
 
 void vertex() {
-	// Sample heightmap via the UV attribute from the mesh. Stepped patches put
-	// multiple verts at the same XZ with different intended heights (wall top vs
-	// bottom), so we can't derive the sample coord from position alone.
+	// Heightmap UV in UV (per-corner, 2x density). Kindmap UV in UV2 (per-cell
+	// center). Stepped patches put multiple verts at the same XZ with different
+	// intended heights (wall top vs bottom), so UV cannot be derived from
+	// position alone.
 	vec2 uv_local = UV;
+	vec2 kind_uv = UV2;
 	float h = sample_height(uv_local);
 	// Water top sits half a tile below the raw ceiling so shores read as a step
 	// above the waterline. Matches NaiveChunkMesher's topDrop path for L0/L1.
-	float kind_byte = sample_kind(uv_local);
+	// Corner heights for water cells are pre-baked to the water-level Y so
+	// sampling always gives a flat surface regardless of the sand bed beneath.
+	float kind_byte = sample_kind(kind_uv);
 	float is_water = step(2.5, kind_byte) * step(kind_byte, 3.5);
 	VERTEX.y += h - is_water * water_top_drop_m;
 	v_local_pos = VERTEX;
 	v_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_uv_local = uv_local;
+	v_kind_uv = kind_uv;
 	UV = VERTEX.xz * (1.0 / 1.5); // 1.5m per tile → 1 unit of UV = 1 tile
 }
 
@@ -145,7 +155,7 @@ void fragment() {
 	// Kind per-fragment. filter_nearest snaps to the cell center, so interior
 	// fragments land on a single stable byte; edges may straddle but the wall
 	// texture branches hide it.
-	float kind_byte = sample_kind(v_uv_local);
+	float kind_byte = sample_kind(v_kind_uv);
 	bool is_water = kind_byte > 2.5 && kind_byte < 3.5;
 	bool is_sand  = kind_byte > 3.5 && kind_byte < 4.5;
 

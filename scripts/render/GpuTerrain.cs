@@ -138,6 +138,119 @@ public static class GpuTerrain
         return mesh;
     }
 
+    /// <summary>
+    /// Stepped grid mesh for the corner-heightmap pipeline. Per cell, the top
+    /// quad has 4 distinct corner UVs sampling SW/SE/NW/NE pixels of a 2x-
+    /// density heightmap — when those four corners disagree the top becomes a
+    /// ramp (smooth terrain); when adjacent cells' facing corners disagree the
+    /// wall quads pick up a height delta and render as cliffs. Walls sample
+    /// neighbor-cell corner pixels for bottom verts, so height disagreement
+    /// across cells emerges as vertical geometry automatically.
+    ///
+    /// Layout of the heightmap texture (cornersSize x cornersSize, nearest filter):
+    ///   pixel (2cx+1, 2cz+1) = cell(cx,cz).SW   pixel (2cx+2, 2cz+1) = .SE
+    ///   pixel (2cx+1, 2cz+2) = cell(cx,cz).NW   pixel (2cx+2, 2cz+2) = .NE
+    /// 1-pixel border around all four sides carries the neighbor group's
+    /// edge corners so seam walls have correct bottom samples.
+    ///
+    /// Kindmap is 1-per-cell (kindsSize = cellsPerSide+2, 1px border) sampled
+    /// via UV2 from the mesh; each vertex of a cell carries the same kind UV.
+    /// </summary>
+    public static ArrayMesh BuildCornerPatchMeshStepped(
+        int cellsPerSide, float patchWidthMeters, int cornersSize, int kindsSize)
+    {
+        var cell = patchWidthMeters / cellsPerSide;
+        var totalCells = cellsPerSide * cellsPerSide;
+        var vertCount = totalCells * 20;
+        var triCount = totalCells * 10;
+        var vertexArr = new Vector3[vertCount];
+        var uvArr = new Vector2[vertCount];
+        var uv2Arr = new Vector2[vertCount];
+        var indices = new int[triCount * 3];
+
+        var invC = 1f / cornersSize;
+        var invK = 1f / kindsSize;
+        var half = patchWidthMeters * 0.5f;
+        var vi = 0;
+        var ii = 0;
+        for (var cz = 0; cz < cellsPerSide; cz++)
+        for (var cx = 0; cx < cellsPerSide; cx++)
+        {
+            var x0 = cx * cell - half;
+            var x1 = x0 + cell;
+            var z0 = cz * cell - half;
+            var z1 = z0 + cell;
+
+            var uSW = new Vector2((2f*cx + 1.5f) * invC, (2f*cz + 1.5f) * invC);
+            var uSE = new Vector2((2f*cx + 2.5f) * invC, (2f*cz + 1.5f) * invC);
+            var uNW = new Vector2((2f*cx + 1.5f) * invC, (2f*cz + 2.5f) * invC);
+            var uNE = new Vector2((2f*cx + 2.5f) * invC, (2f*cz + 2.5f) * invC);
+            var uKind = new Vector2((cx + 1.5f) * invK, (cz + 1.5f) * invK);
+
+            var uPxSW = new Vector2((2f*cx + 3.5f) * invC, (2f*cz + 1.5f) * invC);
+            var uPxNW = new Vector2((2f*cx + 3.5f) * invC, (2f*cz + 2.5f) * invC);
+            var uNxSE = new Vector2((2f*cx + 0.5f) * invC, (2f*cz + 1.5f) * invC);
+            var uNxNE = new Vector2((2f*cx + 0.5f) * invC, (2f*cz + 2.5f) * invC);
+            var uPzSW = new Vector2((2f*cx + 1.5f) * invC, (2f*cz + 3.5f) * invC);
+            var uPzSE = new Vector2((2f*cx + 2.5f) * invC, (2f*cz + 3.5f) * invC);
+            var uNzNW = new Vector2((2f*cx + 1.5f) * invC, (2f*cz + 0.5f) * invC);
+            var uNzNE = new Vector2((2f*cx + 2.5f) * invC, (2f*cz + 0.5f) * invC);
+
+            var t0 = vi;
+            vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi] = uSW; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi] = uSE; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi] = uNW; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi] = uNE; uv2Arr[vi++] = uKind;
+            indices[ii++] = t0 + 0; indices[ii++] = t0 + 2; indices[ii++] = t0 + 1;
+            indices[ii++] = t0 + 1; indices[ii++] = t0 + 2; indices[ii++] = t0 + 3;
+
+            var wPx = vi;
+            vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi] = uSE;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi] = uNE;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi] = uPxSW; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi] = uPxNW; uv2Arr[vi++] = uKind;
+            indices[ii++] = wPx + 0; indices[ii++] = wPx + 1; indices[ii++] = wPx + 2;
+            indices[ii++] = wPx + 2; indices[ii++] = wPx + 1; indices[ii++] = wPx + 3;
+
+            var wNx = vi;
+            vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi] = uSW;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi] = uNW;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi] = uNxSE; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi] = uNxNE; uv2Arr[vi++] = uKind;
+            indices[ii++] = wNx + 0; indices[ii++] = wNx + 2; indices[ii++] = wNx + 1;
+            indices[ii++] = wNx + 1; indices[ii++] = wNx + 2; indices[ii++] = wNx + 3;
+
+            var wPz = vi;
+            vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi] = uNW;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi] = uNE;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x0, 0, z1); uvArr[vi] = uPzSW; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z1); uvArr[vi] = uPzSE; uv2Arr[vi++] = uKind;
+            indices[ii++] = wPz + 0; indices[ii++] = wPz + 2; indices[ii++] = wPz + 1;
+            indices[ii++] = wPz + 1; indices[ii++] = wPz + 2; indices[ii++] = wPz + 3;
+
+            var wNz = vi;
+            vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi] = uSW;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi] = uSE;   uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x0, 0, z0); uvArr[vi] = uNzNW; uv2Arr[vi++] = uKind;
+            vertexArr[vi] = new Vector3(x1, 0, z0); uvArr[vi] = uNzNE; uv2Arr[vi++] = uKind;
+            indices[ii++] = wNz + 0; indices[ii++] = wNz + 1; indices[ii++] = wNz + 2;
+            indices[ii++] = wNz + 2; indices[ii++] = wNz + 1; indices[ii++] = wNz + 3;
+        }
+
+        var arrays = new GArray();
+        arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = vertexArr;
+        arrays[(int)Mesh.ArrayType.TexUV] = uvArr;
+        arrays[(int)Mesh.ArrayType.TexUV2] = uv2Arr;
+        arrays[(int)Mesh.ArrayType.Index] = indices;
+        var mesh = new ArrayMesh();
+        mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        mesh.CustomAabb = new Aabb(
+            new Vector3(-half - 1f, -2f, -half - 1f),
+            new Vector3(patchWidthMeters + 2f, 260f, patchWidthMeters + 2f));
+        return mesh;
+    }
+
     public static ArrayMesh BuildPatchMesh(int cellsPerSide, float patchWidthMeters)
     {
         var verts = new int[(cellsPerSide + 1) * (cellsPerSide + 1)];

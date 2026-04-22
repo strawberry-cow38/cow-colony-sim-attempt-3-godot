@@ -235,6 +235,178 @@ public sealed class NaiveChunkMesher : IChunkMesher
         };
     }
 
+    public readonly struct TerrainGroupEntry
+    {
+        public readonly int Lx;
+        public readonly int Lz;
+        public readonly TerrainSnapshot Snap;
+        public TerrainGroupEntry(int lx, int lz, TerrainSnapshot snap)
+        {
+            Lx = lx; Lz = lz; Snap = snap;
+        }
+    }
+
+    public sealed class CornerHeightmapPatch
+    {
+        // Heights in meters, packed 2x cell density + 1px border per side:
+        //   cell (cx,cz).SW -> Corners[2cx+1, 2cz+1]
+        //   cell (cx,cz).SE -> Corners[2cx+2, 2cz+1]
+        //   cell (cx,cz).NW -> Corners[2cx+1, 2cz+2]
+        //   cell (cx,cz).NE -> Corners[2cx+2, 2cz+2]
+        // Border columns/rows carry neighbor-group edge corners so seam walls
+        // resolve without gaps. Width/height = cellsPerSide*2 + 2.
+        public float[,] Corners = null!;
+        // Per-cell kind with 1px border, width = cellsPerSide + 2. Own cell
+        // (cx,cz).Kind -> Kinds[cx+1, cz+1].
+        public byte[,] Kinds = null!;
+        public int CornersSize;
+        public int KindsSize;
+        public int Revision;
+        public int LodLevel;
+        public float MaxHeightMeters;
+    }
+
+    public CornerHeightmapPatch? BuildGroupCornerPatch(
+        List<TerrainGroupEntry> entries, int groupChunks, int cellsPerSide, int lodLevel)
+    {
+        const int s = Chunk.Size;
+        var sizeTiles = groupChunks * s;
+        if (sizeTiles % cellsPerSide != 0) return null;
+        var step = sizeTiles / cellsPerSide;
+        var th = TileCoord.TileH;
+        var waterY = WorldGen.WaterLevelY * th;
+
+        var byLxLz = new Dictionary<(int, int), TerrainSnapshot>();
+        var revSum = 0;
+        foreach (var e in entries)
+        {
+            byLxLz[(e.Lx, e.Lz)] = e.Snap;
+            revSum += e.Snap.Revision;
+        }
+        if (byLxLz.Count == 0) return null;
+
+        float ReadCornerM(int tx, int tz, int cornerIdx, byte kindFallback)
+        {
+            var chunkLx = FloorDiv(tx, s);
+            var chunkLz = FloorDiv(tz, s);
+            var lx = tx - chunkLx * s;
+            var lz = tz - chunkLz * s;
+            if (!byLxLz.TryGetValue((chunkLx, chunkLz), out var snap)) return 0f;
+            var kind = (TileKind)snap.Kinds[lx, lz];
+            if (kind == TileKind.Water) return waterY;
+            return snap.Corners[lx, lz, cornerIdx] * th;
+        }
+
+        byte ReadKind(int tx, int tz)
+        {
+            var chunkLx = FloorDiv(tx, s);
+            var chunkLz = FloorDiv(tz, s);
+            var lx = tx - chunkLx * s;
+            var lz = tz - chunkLz * s;
+            if (!byLxLz.TryGetValue((chunkLx, chunkLz), out var snap)) return 0;
+            return snap.Kinds[lx, lz];
+        }
+
+        var cornersSize = cellsPerSide * 2 + 2;
+        var kindsSize = cellsPerSide + 2;
+        var corners = new float[cornersSize, cornersSize];
+        var kinds = new byte[kindsSize, kindsSize];
+        var any = false;
+        var maxH = 0f;
+
+        void WriteCorner(int px, int pz, float h)
+        {
+            corners[px, pz] = h;
+            if (h > maxH) maxH = h;
+        }
+
+        // Own cells: sample 4 tile corners per cell from the cell's 4 corner tiles.
+        for (var cz = 0; cz < cellsPerSide; cz++)
+        for (var cx = 0; cx < cellsPerSide; cx++)
+        {
+            var txMin = cx * step;
+            var txMax = txMin + step - 1;
+            var tzMin = cz * step;
+            var tzMax = tzMin + step - 1;
+            var kind = ReadKind(txMin + step / 2, tzMin + step / 2);
+            if (kind != 0) any = true;
+            WriteCorner(2 * cx + 1, 2 * cz + 1, ReadCornerM(txMin, tzMin, TerrainChunk.SW, kind));
+            WriteCorner(2 * cx + 2, 2 * cz + 1, ReadCornerM(txMax, tzMin, TerrainChunk.SE, kind));
+            WriteCorner(2 * cx + 1, 2 * cz + 2, ReadCornerM(txMin, tzMax, TerrainChunk.NW, kind));
+            WriteCorner(2 * cx + 2, 2 * cz + 2, ReadCornerM(txMax, tzMax, TerrainChunk.NE, kind));
+            kinds[cx + 1, cz + 1] = kind;
+        }
+
+        if (!any) return null;
+
+        // -X border column (x=0): carries -X neighbor's rightmost cell SE/NE.
+        // +X border column (x=cornersSize-1): carries +X neighbor's leftmost cell SW/NW.
+        for (var cz = 0; cz < cellsPerSide; cz++)
+        {
+            var tzMin = cz * step;
+            var tzMax = tzMin + step - 1;
+            var kindL = ReadKind(-1, tzMin + step / 2);
+            var kindR = ReadKind(sizeTiles, tzMin + step / 2);
+            WriteCorner(0, 2 * cz + 1, ReadCornerM(-1, tzMin, TerrainChunk.SE, kindL));
+            WriteCorner(0, 2 * cz + 2, ReadCornerM(-1, tzMax, TerrainChunk.NE, kindL));
+            WriteCorner(cornersSize - 1, 2 * cz + 1, ReadCornerM(sizeTiles, tzMin, TerrainChunk.SW, kindR));
+            WriteCorner(cornersSize - 1, 2 * cz + 2, ReadCornerM(sizeTiles, tzMax, TerrainChunk.NW, kindR));
+            if (kindL == 0) kindL = kinds[1, cz + 1];
+            if (kindR == 0) kindR = kinds[cellsPerSide, cz + 1];
+            kinds[0, cz + 1] = kindL;
+            kinds[kindsSize - 1, cz + 1] = kindR;
+        }
+
+        // -Z border row (z=0): -Z neighbor's topmost cell NW/NE.
+        // +Z border row (z=cornersSize-1): +Z neighbor's bottom cell SW/SE.
+        for (var cx = 0; cx < cellsPerSide; cx++)
+        {
+            var txMin = cx * step;
+            var txMax = txMin + step - 1;
+            var kindS = ReadKind(txMin + step / 2, -1);
+            var kindN = ReadKind(txMin + step / 2, sizeTiles);
+            WriteCorner(2 * cx + 1, 0, ReadCornerM(txMin, -1, TerrainChunk.NW, kindS));
+            WriteCorner(2 * cx + 2, 0, ReadCornerM(txMax, -1, TerrainChunk.NE, kindS));
+            WriteCorner(2 * cx + 1, cornersSize - 1, ReadCornerM(txMin, sizeTiles, TerrainChunk.SW, kindN));
+            WriteCorner(2 * cx + 2, cornersSize - 1, ReadCornerM(txMax, sizeTiles, TerrainChunk.SE, kindN));
+            if (kindS == 0) kindS = kinds[cx + 1, 1];
+            if (kindN == 0) kindN = kinds[cx + 1, cellsPerSide];
+            kinds[cx + 1, 0] = kindS;
+            kinds[cx + 1, kindsSize - 1] = kindN;
+        }
+
+        // Border fallback for cells with no neighbor data: replicate nearest
+        // interior corner so wall bottoms don't collapse to zero.
+        for (var px = 0; px < cornersSize; px++)
+        {
+            if (corners[px, 0] == 0f) corners[px, 0] = corners[px, 1];
+            if (corners[px, cornersSize - 1] == 0f) corners[px, cornersSize - 1] = corners[px, cornersSize - 2];
+        }
+        for (var pz = 0; pz < cornersSize; pz++)
+        {
+            if (corners[0, pz] == 0f) corners[0, pz] = corners[1, pz];
+            if (corners[cornersSize - 1, pz] == 0f) corners[cornersSize - 1, pz] = corners[cornersSize - 2, pz];
+        }
+
+        return new CornerHeightmapPatch
+        {
+            Corners = corners,
+            Kinds = kinds,
+            CornersSize = cornersSize,
+            KindsSize = kindsSize,
+            Revision = revSum,
+            LodLevel = lodLevel,
+            MaxHeightMeters = maxH,
+        };
+    }
+
+    private static int FloorDiv(int a, int b)
+    {
+        var q = a / b;
+        if ((a % b != 0) && ((a < 0) != (b < 0))) q--;
+        return q;
+    }
+
     public MeshBuildResult? BuildGroupMesh(
         List<GroupChunkEntry> entries, TilePos baseChunkKey, int groupChunks, int step, int lodLevel,
         int cliffMinDelta = 1)
