@@ -49,11 +49,6 @@ public static class WorldGen
     // — stays 0 while the river has budget, grows to 1 near the limit,
     // turning the path into a goal-locked line when time is running out.
     private const float RiverGoalUrgencyBoost  = 1.8f;
-    // Mountain-avoidance weight. At each step, the 8 candidates are
-    // penalized by mountain-mask value so paths route around mountains
-    // instead of through them. High enough to matter, low enough that
-    // rivers still cross mountain shoulders when no lower route exists.
-    private const float RiverMountainAvoid     = 2.5f;
     // Budget = manhattan * multiplier + slack. Raised so rivers have room
     // to meander laterally without running out before they reach the far
     // coast.
@@ -284,23 +279,41 @@ public static class WorldGen
         return surfaceTiles;
     }
 
-    // Pick RiverCount coast-to-coast paths using a heading-based walk.
-    // At each step the walker blends the meander-noise angle (primary) with
-    // a goal-directional pull (weak while there is budget, strong when
-    // nearing exhaustion), then picks whichever of the 8 neighbor cells
-    // aligns best with the blended heading while penalizing mountain
-    // terrain so rivers route around ridges. Progress is NOT force-filtered
-    // — the walker is free to briefly wander backwards when the meander
-    // noise calls for it, producing natural gentle curves instead of the
-    // zig-zag that a hard forced-progress filter generates. A shared
-    // `used` mask enforces non-crossing across river indices; the fallback
-    // relaxes it only when the walker is fully pinned.
+    // Pick RiverCount coast-to-coast paths using a continuous-position
+    // walker. The walker holds a float (px, pz) and advances by a unit
+    // heading vector each step; the cell it occupies (floor) is recorded
+    // and marked as river. The heading is the normalized sum of the
+    // meander-noise direction, a goal-pull (weak while there is budget,
+    // strong when nearing exhaustion), and the previous-step heading
+    // scaled by RiverWalkerMomentum — momentum damps sharp direction
+    // flips so the rasterized cell trail curves smoothly instead of
+    // zigzagging between pure 45° diagonals. Mountain cells are a hard
+    // block: if the heading would step into a cell whose mountain-mask
+    // exceeds MountainOnset, the walker rotates the heading by ±10°,
+    // ±20°, … up to ±100° to find a non-mountain cell that is also not
+    // already claimed by an earlier river. Only if no rotation finds a
+    // legal cell does the walker relax the non-crossing or mountain
+    // constraints, in that order.
+    private const float RiverWalkerMomentum = 1.25f;
+    private static readonly float[] RiverHeadingRotations =
+    {
+        0f,
+        -0.175f,  0.175f,   // ±10°
+        -0.349f,  0.349f,   // ±20°
+        -0.524f,  0.524f,   // ±30°
+        -0.698f,  0.698f,   // ±40°
+        -0.873f,  0.873f,   // ±50°
+        -1.047f,  1.047f,   // ±60°
+        -1.222f,  1.222f,   // ±70°
+        -1.396f,  1.396f,   // ±80°
+        -1.571f,  1.571f,   // ±90°
+        -1.745f,  1.745f,   // ±100°
+    };
+
     private static List<RiverPath> PlanRivers(
         NoiseStack noise, int seed,
         int sizeX, int sizeZ, int halfX, int halfZ)
     {
-        int[] dxs = { -1, 0, 1, -1, 1, -1, 0, 1 };
-        int[] dzs = { -1, -1, -1, 0, 0, 1, 1, 1 };
         var used = new bool[sizeX, sizeZ];
         var paths = new List<RiverPath>(RiverCount);
 
@@ -317,15 +330,25 @@ public static class WorldGen
             var (xiE, ziE) = CoastPoint(sideB, u4, sizeX, sizeZ);
 
             var cells = new List<(int X, int Z)>();
-            var cxi = xiS; var czi = ziS;
+            var px = xiS + 0.5f;
+            var pz = ziS + 0.5f;
+            var hPrevX = 0f;
+            var hPrevZ = 0f;
+            var lastCxi = int.MinValue;
+            var lastCzi = int.MinValue;
             var manhattan = Math.Abs(xiE - xiS) + Math.Abs(ziE - ziS);
             var maxSteps = (int)(manhattan * RiverBudgetMultiplier) + RiverWalkSlack;
             for (var step = 0; step < maxSteps; step++)
             {
-                if ((uint)cxi < (uint)sizeX && (uint)czi < (uint)sizeZ)
+                var cxi = (int)MathF.Floor(px);
+                var czi = (int)MathF.Floor(pz);
+                if ((uint)cxi < (uint)sizeX && (uint)czi < (uint)sizeZ
+                    && (cxi != lastCxi || czi != lastCzi))
                 {
                     cells.Add((cxi - halfX, czi - halfZ));
                     used[cxi, czi] = true;
+                    lastCxi = cxi;
+                    lastCzi = czi;
                 }
                 // Reached the far coast — stop. Chebyshev radius 1 snaps
                 // the tail cell cleanly to the endpoint so the path ends
@@ -342,10 +365,11 @@ public static class WorldGen
                 var urgencyRaw = chebLeft / (float)remaining;
                 var urgency = Smoothstep(0.35f, 1.0f, urgencyRaw);
 
-                // Low-freq meander noise at unscaled tile coords. Frequency
-                // is set in NoiseStack (CellFeature.cs); lower freq = gentler
-                // long bends, higher freq = tighter wiggles.
-                var mAng = noise.Meander.GetNoise(cxi, czi) * MathF.PI;
+                // Low-freq meander noise sampled at the walker's float
+                // position — continuous inputs produce a continuous
+                // heading vector, unlike the per-cell discrete sampling
+                // an 8-dir walker would use.
+                var mAng = noise.Meander.GetNoise(px, pz) * MathF.PI;
                 var mdx = MathF.Cos(mAng);
                 var mdz = MathF.Sin(mAng);
 
@@ -354,22 +378,22 @@ public static class WorldGen
                 var gdz = goalLen > 0f ? dzGoal / goalLen : 0f;
 
                 var goalW = RiverGoalBaseBias + urgency * RiverGoalUrgencyBoost;
-                var hx = mdx + goalW * gdx;
-                var hz = mdz + goalW * gdz;
+                var hx = mdx + goalW * gdx + RiverWalkerMomentum * hPrevX;
+                var hz = mdz + goalW * gdz + RiverWalkerMomentum * hPrevZ;
                 var hMag = MathF.Sqrt(hx * hx + hz * hz);
                 if (hMag > 1e-6f) { hx /= hMag; hz /= hMag; }
+                else { hx = gdx; hz = gdz; }
 
-                var bestK = PickStep(cxi, czi, hx, hz, dxs, dzs,
-                    noise, halfX, halfZ, sizeX, sizeZ, used, avoidUsed: true);
-                if (bestK < 0)
-                {
-                    // Fully pinned — relax non-crossing rather than stall.
-                    bestK = PickStep(cxi, czi, hx, hz, dxs, dzs,
-                        noise, halfX, halfZ, sizeX, sizeZ, used, avoidUsed: false);
-                }
-                if (bestK < 0) break;
-                cxi += dxs[bestK];
-                czi += dzs[bestK];
+                var pick = FindHeadingStep(
+                    px, pz, hx, hz, noise, halfX, halfZ,
+                    sizeX, sizeZ, used, lastCxi, lastCzi);
+                if (!pick.HasValue) break;
+
+                var (rx, rz) = pick.Value;
+                px += rx;
+                pz += rz;
+                hPrevX = rx;
+                hPrevZ = rz;
             }
 
             // Net-direction flow is retained for consumers that only need
@@ -384,32 +408,47 @@ public static class WorldGen
         return paths;
     }
 
-    // Score each of the 8 neighbors against the target heading + mountain
-    // penalty. Highest score wins. Returns -1 when no free neighbor is
-    // reachable (caller will relax non-crossing and retry).
-    private static int PickStep(int cxi, int czi, float hx, float hz,
-        int[] dxs, int[] dzs, NoiseStack noise, int halfX, int halfZ,
-        int sizeX, int sizeZ, bool[,] used, bool avoidUsed)
+    // Continuous-walker heading pick. Returns a unit-length step vector
+    // landing in a legal cell, or null if no cell is reachable. Strategy
+    // is a widening-cone rotation search:
+    //   pass 0 → hard mountain block + non-crossing
+    //   pass 1 → hard mountain block, relax non-crossing
+    //   pass 2 → relax everything (last-resort, should be extremely rare)
+    // A "legal" cell is in bounds and, per-pass, not-mountain and/or not
+    // already claimed. Staying in the current cell is always legal since
+    // it's the walker's own starting cell for this step.
+    private static (float rx, float rz)? FindHeadingStep(
+        float px, float pz, float hx, float hz,
+        NoiseStack noise, int halfX, int halfZ,
+        int sizeX, int sizeZ, bool[,] used,
+        int curCxi, int curCzi)
     {
-        var bestK = -1;
-        var bestScore = float.NegativeInfinity;
-        for (var k = 0; k < 8; k++)
+        for (var pass = 0; pass < 3; pass++)
         {
-            var stepX = dxs[k]; var stepZ = dzs[k];
-            var nxi = cxi + stepX; var nzi = czi + stepZ;
-            if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
-            if (avoidUsed && used[nxi, nzi]) continue;
-            var invLen = 1f / MathF.Sqrt(stepX * stepX + stepZ * stepZ);
-            var headingAlign = (stepX * hx + stepZ * hz) * invLen;
-
-            var wx = nxi - halfX; var wz = nzi - halfZ;
-            var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
-            var mountainPenalty = Smoothstep(MountainOnset, MountainFull, maskRaw);
-
-            var score = headingAlign - mountainPenalty * RiverMountainAvoid;
-            if (score > bestScore) { bestScore = score; bestK = k; }
+            var enforceMountain = pass < 2;
+            var enforceUsed = pass < 1;
+            foreach (var offset in RiverHeadingRotations)
+            {
+                var c = MathF.Cos(offset);
+                var s = MathF.Sin(offset);
+                var nhx = hx * c - hz * s;
+                var nhz = hx * s + hz * c;
+                var nx = (int)MathF.Floor(px + nhx);
+                var nz = (int)MathF.Floor(pz + nhz);
+                if ((uint)nx >= (uint)sizeX || (uint)nz >= (uint)sizeZ) continue;
+                var stayingPut = nx == curCxi && nz == curCzi;
+                if (enforceUsed && !stayingPut && used[nx, nz]) continue;
+                if (enforceMountain)
+                {
+                    var wx = nx - halfX;
+                    var wz = nz - halfZ;
+                    var maskRaw = (noise.MountainMask.GetNoise(wx, wz) + 1f) * 0.5f;
+                    if (maskRaw >= MountainOnset) continue;
+                }
+                return (nhx, nhz);
+            }
         }
-        return bestK;
+        return null;
     }
 
     // Chebyshev distance transform over the river-cell mask. Two passes
