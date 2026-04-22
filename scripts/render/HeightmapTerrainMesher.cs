@@ -41,6 +41,17 @@ public sealed class HeightmapTerrainMesher
         var uvs = new List<Vector2>();
         var indices = new List<int>();
 
+        // Separate bucket for translucent water planes. Kept on its own
+        // ArrayMesh surface downstream so GridRenderer can bind a transparent
+        // material only to the water surface — mixing alpha<1 vertices into
+        // the main surface forces every opaque triangle through the alpha
+        // queue with no depth write, which breaks water sorting.
+        var wVerts = new List<Vector3>();
+        var wNormals = new List<Vector3>();
+        var wColors = new List<Color>();
+        var wUvs = new List<Vector2>();
+        var wIndices = new List<int>();
+
         for (var lx = 0; lx < s; lx++)
         for (var lz = 0; lz < s; lz++)
         {
@@ -147,12 +158,12 @@ public sealed class HeightmapTerrainMesher
 
             if (isWater)
             {
-                EmitWaterPlane(verts, normals, colors, uvs, indices,
+                EmitWaterPlane(wVerts, wNormals, wColors, wUvs, wIndices,
                     x0, z0, x1, z1, wx, wz);
             }
         }
 
-        if (indices.Count == 0) return null;
+        if (indices.Count == 0 && wIndices.Count == 0) return null;
 
         return new MeshBuildResult
         {
@@ -161,6 +172,11 @@ public sealed class HeightmapTerrainMesher
             Colors = colors.ToArray(),
             Uvs = uvs.ToArray(),
             Indices = indices.ToArray(),
+            WaterVerts = wIndices.Count > 0 ? wVerts.ToArray() : null,
+            WaterNormals = wIndices.Count > 0 ? wNormals.ToArray() : null,
+            WaterColors = wIndices.Count > 0 ? wColors.ToArray() : null,
+            WaterUvs = wIndices.Count > 0 ? wUvs.ToArray() : null,
+            WaterIndices = wIndices.Count > 0 ? wIndices.ToArray() : null,
             Revision = snap.Revision,
             LodLevel = 0,
         };

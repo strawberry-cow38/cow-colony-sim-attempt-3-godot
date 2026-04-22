@@ -63,6 +63,7 @@ public sealed partial class GridRenderer : Node3D
 
     private SimHost? _simHost;
     private StandardMaterial3D? _material;
+    private StandardMaterial3D? _waterMaterial;
     private Shader? _terrainShader;
     private Texture2D? _grassTex;
     private ArrayMesh? _g4PatchMesh;
@@ -91,11 +92,18 @@ public sealed partial class GridRenderer : Node3D
         {
             AlbedoTexture = _grassTex,
             VertexColorUseAsAlbedo = true,
-            // DepthPrePass so opaque bed writes depth before translucent
-            // water quads sort against it. Plain Alpha would let water
-            // leak through sloped sand.
-            Transparency = BaseMaterial3D.TransparencyEnum.AlphaDepthPrePass,
             Roughness = 0.95f,
+            TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
+        };
+        // Dedicated water material. Kept on its own ArrayMesh surface so a
+        // single shared transparent material doesn't punt every opaque
+        // terrain triangle through the alpha queue.
+        _waterMaterial = new StandardMaterial3D
+        {
+            AlbedoTexture = _grassTex,
+            VertexColorUseAsAlbedo = true,
+            Transparency = BaseMaterial3D.TransparencyEnum.AlphaDepthPrePass,
+            Roughness = 0.4f,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
         };
         if (GpuTerrainEnabled)
@@ -539,10 +547,13 @@ public sealed partial class GridRenderer : Node3D
     {
         // HeightmapTerrainMesher emits world-space vertices (chunkBaseX/Z in
         // the mesher), so the MeshInstance sits at origin + Y bias only.
+        // No MaterialOverride — the assembled ArrayMesh binds surface 0 to
+        // the opaque terrain material and (when present) surface 1 to the
+        // translucent water material. A MaterialOverride would flatten both
+        // surfaces to a single material.
         return new MeshInstance3D
         {
             Position = new Vector3(0f, TerrainYBias, 0f),
-            MaterialOverride = _material,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
     }
@@ -905,8 +916,9 @@ public sealed partial class GridRenderer : Node3D
         };
     }
 
-    private static ArrayMesh AssembleArrayMesh(MeshBuildResult r)
+    private ArrayMesh AssembleArrayMesh(MeshBuildResult r)
     {
+        var mesh = new ArrayMesh();
         var arrays = new GArray();
         arrays.Resize((int)Mesh.ArrayType.Max);
         arrays[(int)Mesh.ArrayType.Vertex] = r.Verts;
@@ -914,8 +926,26 @@ public sealed partial class GridRenderer : Node3D
         arrays[(int)Mesh.ArrayType.Color] = r.Colors;
         arrays[(int)Mesh.ArrayType.TexUV] = r.Uvs;
         arrays[(int)Mesh.ArrayType.Index] = r.Indices;
-        var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        // Set per-surface material on the mesh itself. Voxel + group
+        // MeshInstances carry a MaterialOverride that wins over this, so the
+        // assignment is only load-bearing for terrain MeshInstance (which
+        // intentionally has no override so water surface can use its own
+        // translucent material).
+        mesh.SurfaceSetMaterial(0, _material);
+
+        if (r.WaterIndices != null && r.WaterIndices.Length > 0)
+        {
+            var wArrays = new GArray();
+            wArrays.Resize((int)Mesh.ArrayType.Max);
+            wArrays[(int)Mesh.ArrayType.Vertex] = r.WaterVerts;
+            wArrays[(int)Mesh.ArrayType.Normal] = r.WaterNormals;
+            wArrays[(int)Mesh.ArrayType.Color] = r.WaterColors;
+            wArrays[(int)Mesh.ArrayType.TexUV] = r.WaterUvs;
+            wArrays[(int)Mesh.ArrayType.Index] = r.WaterIndices;
+            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, wArrays);
+            mesh.SurfaceSetMaterial(1, _waterMaterial);
+        }
         return mesh;
     }
 

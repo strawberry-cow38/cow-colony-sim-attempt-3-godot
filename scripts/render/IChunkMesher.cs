@@ -12,6 +12,15 @@ public sealed class MeshBuildResult
     public int[] Indices = null!;
     public int Revision;
     public int LodLevel;
+
+    // Optional second surface for translucent water planes. Kept off the main
+    // surface so it can be drawn with a transparent material without punting
+    // every opaque terrain triangle through the alpha queue.
+    public Vector3[]? WaterVerts;
+    public Vector3[]? WaterNormals;
+    public Color[]? WaterColors;
+    public Vector2[]? WaterUvs;
+    public int[]? WaterIndices;
 }
 
 public interface IChunkMesher
