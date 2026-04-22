@@ -25,7 +25,7 @@ public sealed class NoiseStack
         Detail       = Make(seed + 4, 0.04f,   2, FastNoiseLite.FractalType.FBm);
         Lake         = Make(seed + 5, 0.010f,  2, FastNoiseLite.FractalType.FBm);
         RiverSource  = Make(seed + 6, 0.003f,  2, FastNoiseLite.FractalType.FBm);
-        Meander      = Make(seed + 7, 0.012f,  2, FastNoiseLite.FractalType.FBm);
+        Meander      = Make(seed + 7, 0.04f,   2, FastNoiseLite.FractalType.FBm);
     }
 
     private static FastNoiseLite Make(int seed, float freq, int oct, FastNoiseLite.FractalType type)

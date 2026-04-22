@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace CowColonySim.Sim.Grid;
@@ -33,17 +34,32 @@ public static class WorldGen
     // different side, then winds toward the end with a meander bias. The
     // path is forced to make progress toward the goal each step so it
     // always reaches the far coast — no half-rivers, no merges, no tribs.
+    // Rivers never cross each other — subsequent river plans refuse to
+    // step into cells claimed by any earlier river.
     private const int   RiverCount             = 3;
     // Bed geometry. Fixed width 5 tiles (RiverBedRadius = 2 → 5-diameter
     // disc). Fixed depth below sea level so water surface is flat.
     private const int   RiverBedRadius         = 2;
     private const int   RiverBedDepth          = 2;
-    // Meander bias weight vs goal-progress weight. Higher = curlier path.
-    // Kept below progress weight so the walk is guaranteed to converge.
-    private const float RiverMeanderWeight     = 0.75f;
+    // Meander bias weight vs goal-progress weight. Raised above 1 so within
+    // the forced-progress window (never step away from goal) the meander
+    // angle dominates step selection — lots of lateral zig-zag. Convergence
+    // is still guaranteed because out-of-direction steps are pre-filtered.
+    private const float RiverMeanderWeight     = 1.2f;
     // Max walk length fudge factor. Path must fit in manhattan(start,end)
     // steps plus this slack for chebyshev/diagonal moves and meander.
-    private const int   RiverWalkSlack         = 64;
+    private const int   RiverWalkSlack         = 128;
+    // River-proximity mask radii. Within RiverMountainInner tiles of any
+    // river cell, mountain weight is fully suppressed and baseH is pulled
+    // toward plains. Beyond RiverMountainOuter, no influence. Smoothstep
+    // blend between. Keeps rivers running through plains / valleys, never
+    // through ridgeline cliffs.
+    private const int   RiverMountainInner     = 6;
+    private const int   RiverMountainOuter     = 24;
+    // Plains pull target near rivers — low rolling valley floor. Sits
+    // comfortably above sea level so the river's 5-tile bed still cuts a
+    // visible channel without drowning the surrounding land.
+    private const float RiverValleyH           = 3f;
 
     // Bank-lowering pass. Iterative single-step dilation: every cell must
     // sit at most one tile above its lowest 8-neighbor. Sub-sea cells
@@ -78,6 +94,13 @@ public static class WorldGen
         // clamp so at least half the map stays dry by default.
         var coastRadius = Math.Min(CoastRadiusTiles, Math.Min(sizeX, sizeZ) / 4);
 
+        // Plan river paths up-front so the heightmap pass can suppress
+        // mountains / big hills along the river corridor. Paths store world-
+        // space tile coords; the helper converts to array indices when it
+        // needs to index heights[].
+        var riverPaths = PlanRivers(noise, seed, sizeX, sizeZ, halfX, halfZ);
+        var riverDist = BuildRiverDistField(riverPaths, sizeX, sizeZ, halfX, halfZ);
+
         var heights = new int[sizeX, sizeZ];
         Parallel.For(0, sizeX, xi =>
         {
@@ -97,13 +120,27 @@ public static class WorldGen
                 // Ridged FBm within the mask produces dramatic peak-and-valley
                 // shapes; quantization below converts the resulting gradient
                 // into clean terraced plateaus with continuous cliff edges.
+                // River-proximity influence: 1 near a river cell, fading
+                // smoothly to 0 at RiverMountainOuter. Suppresses mountains
+                // and pulls baseH toward a valley floor so rivers run
+                // through plains instead of through ridgelines.
+                var rd = riverDist[xi, zi];
+                var riverInfluence = 1f - Smoothstep(RiverMountainInner, RiverMountainOuter, rd);
+
                 var maskRaw = (noise.MountainMask.GetNoise(x, z) + 1f) * 0.5f;
                 var mountainWeight = Smoothstep(MountainOnset, MountainFull, maskRaw);
+                mountainWeight *= (1f - riverInfluence);
                 if (mountainWeight > 0f)
                 {
                     var ridge = (noise.Ridge.GetNoise(x, z) + 1f) * 0.5f;
                     var mountainH = 12f + ridge * 90f;                // 12..102
                     baseH = Lerp(baseH, mountainH, mountainWeight);
+                }
+                // Pull plains toward the valley floor near rivers — kills
+                // big rolling hills that would otherwise sit over the river.
+                if (riverInfluence > 0f)
+                {
+                    baseH = Lerp(baseH, RiverValleyH, riverInfluence);
                 }
 
                 // Mountains stay smooth — no plateau quantization. Cliffs
@@ -153,8 +190,9 @@ public static class WorldGen
             }
         });
 
-        CarveRivers(heights, noise, seed, sizeX, sizeZ, halfX, halfZ, minHeight);
+        CarveRiversFromPaths(heights, riverPaths, sizeX, sizeZ, halfX, halfZ, minHeight);
         LowerBanks(heights, sizeX, sizeZ);
+        tiles.SetRiverPaths(riverPaths);
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
@@ -234,18 +272,24 @@ public static class WorldGen
         return surfaceTiles;
     }
 
-    // Pick RiverCount random coast-to-coast paths and stamp each as a
-    // flat-bedded trench. Each river starts on a random coast side,
-    // ends on a different side, and meanders between the two with a
-    // noise-perturbed walk. Progress toward the goal is forced on each
-    // step so the path always reaches the far coast — no half-rivers.
-    private static void CarveRivers(
-        int[,] heights, NoiseStack noise, int seed,
-        int sizeX, int sizeZ, int halfX, int halfZ, int minHeight)
+    // Pick RiverCount random coast-to-coast paths. Each river starts on a
+    // random coast side, ends on a different side, and meanders between
+    // the two with a noise-perturbed walk. Progress toward the goal is
+    // forced on each step so the path always reaches the far coast — no
+    // half-rivers, no merges, no tributaries. A shared `used` mask marks
+    // cells claimed by earlier rivers; subsequent rivers refuse to step
+    // into those cells so paths cannot cross. If a river gets trapped
+    // (no forward-progress free step), it falls back to stepping through
+    // claimed cells rather than stalling — better to cross than to leave
+    // a half-river.
+    private static List<RiverPath> PlanRivers(
+        NoiseStack noise, int seed,
+        int sizeX, int sizeZ, int halfX, int halfZ)
     {
         int[] dxs = { -1, 0, 1, -1, 1, -1, 0, 1 };
         int[] dzs = { -1, -1, -1, 0, 0, 1, 1, 1 };
-        var floorH = Math.Max(minHeight, WaterLevelY - RiverBedDepth);
+        var used = new bool[sizeX, sizeZ];
+        var paths = new List<RiverPath>(RiverCount);
 
         for (var riverIdx = 0; riverIdx < RiverCount; riverIdx++)
         {
@@ -259,11 +303,16 @@ public static class WorldGen
             var (xiS, ziS) = CoastPoint(sideA, u3, sizeX, sizeZ);
             var (xiE, ziE) = CoastPoint(sideB, u4, sizeX, sizeZ);
 
+            var cells = new List<(int X, int Z)>();
             var cxi = xiS; var czi = ziS;
             var maxSteps = Math.Abs(xiE - xiS) + Math.Abs(ziE - ziS) + RiverWalkSlack;
             for (var step = 0; step < maxSteps; step++)
             {
-                CarveDisc(heights, cxi, czi, RiverBedRadius, floorH, sizeX, sizeZ);
+                if ((uint)cxi < (uint)sizeX && (uint)czi < (uint)sizeZ)
+                {
+                    cells.Add((cxi - halfX, czi - halfZ));
+                    used[cxi, czi] = true;
+                }
                 if (cxi == xiE && czi == ziE) break;
 
                 var dxGoal = xiE - cxi;
@@ -272,7 +321,11 @@ public static class WorldGen
                 var sgZ = Math.Sign(dzGoal);
                 var goalLen = MathF.Sqrt(dxGoal * dxGoal + dzGoal * dzGoal);
 
-                var mAng = noise.Meander.GetNoise(cxi * 0.08f, czi * 0.08f) * MathF.PI;
+                // Meander frequency is tuned in NoiseStack (CellFeature.cs).
+                // Sample at unscaled tile coords so the frequency there is
+                // the wavelength you get — earlier code multiplied by 0.08
+                // which produced a ~1000-tile wavelength (straight rivers).
+                var mAng = noise.Meander.GetNoise(cxi, czi) * MathF.PI;
                 var pdx = MathF.Cos(mAng);
                 var pdz = MathF.Sin(mAng);
 
@@ -281,9 +334,11 @@ public static class WorldGen
                 for (var k = 0; k < 8; k++)
                 {
                     var stepX = dxs[k]; var stepZ = dzs[k];
-                    // Forced progress: never step away from goal on either axis.
                     if (sgX != 0 && stepX * sgX < 0) continue;
                     if (sgZ != 0 && stepZ * sgZ < 0) continue;
+                    var nxi = cxi + stepX; var nzi = czi + stepZ;
+                    if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                    if (used[nxi, nzi]) continue;
                     var invLen = 1f / MathF.Sqrt(stepX * stepX + stepZ * stepZ);
                     var progAlign = goalLen > 0f
                         ? (stepX * dxGoal + stepZ * dzGoal) * invLen / goalLen
@@ -292,9 +347,101 @@ public static class WorldGen
                     var score = progAlign + meanderAlign * RiverMeanderWeight;
                     if (score > bestScore) { bestScore = score; bestK = k; }
                 }
+                if (bestK < 0)
+                {
+                    // Trapped: relax non-crossing to avoid a half-river.
+                    bestScore = float.NegativeInfinity;
+                    for (var k = 0; k < 8; k++)
+                    {
+                        var stepX = dxs[k]; var stepZ = dzs[k];
+                        if (sgX != 0 && stepX * sgX < 0) continue;
+                        if (sgZ != 0 && stepZ * sgZ < 0) continue;
+                        var nxi = cxi + stepX; var nzi = czi + stepZ;
+                        if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                        var invLen = 1f / MathF.Sqrt(stepX * stepX + stepZ * stepZ);
+                        var progAlign = goalLen > 0f
+                            ? (stepX * dxGoal + stepZ * dzGoal) * invLen / goalLen
+                            : 0f;
+                        if (progAlign > bestScore) { bestScore = progAlign; bestK = k; }
+                    }
+                }
                 if (bestK < 0) break;
                 cxi += dxs[bestK];
                 czi += dzs[bestK];
+            }
+
+            // Flow direction: net start→end unit-ish vector. Rivers with
+            // sideA==sideB (can't happen by construction) would degenerate;
+            // sign(0) is 0 for orthogonal starts so flow reads as pure axis.
+            var flowDx = Math.Sign(xiE - xiS);
+            var flowDz = Math.Sign(ziE - ziS);
+            paths.Add(new RiverPath(cells, flowDx, flowDz));
+        }
+        return paths;
+    }
+
+    // Chebyshev distance transform over the river-cell mask. Two passes
+    // (forward + backward) over a 4-neighbor diagonal-aware template give
+    // the exact Chebyshev distance to the nearest river cell in O(n).
+    private static int[,] BuildRiverDistField(
+        IReadOnlyList<RiverPath> paths,
+        int sizeX, int sizeZ, int halfX, int halfZ)
+    {
+        const int INF = 1 << 20;
+        var dist = new int[sizeX, sizeZ];
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+            dist[xi, zi] = INF;
+
+        foreach (var path in paths)
+        {
+            foreach (var cell in path.Cells)
+            {
+                var xi = cell.X + halfX;
+                var zi = cell.Z + halfZ;
+                if ((uint)xi < (uint)sizeX && (uint)zi < (uint)sizeZ)
+                    dist[xi, zi] = 0;
+            }
+        }
+
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+        {
+            var v = dist[xi, zi];
+            if (xi > 0                  && dist[xi - 1, zi    ] + 1 < v) v = dist[xi - 1, zi    ] + 1;
+            if (zi > 0                  && dist[xi,     zi - 1] + 1 < v) v = dist[xi,     zi - 1] + 1;
+            if (xi > 0 && zi > 0        && dist[xi - 1, zi - 1] + 1 < v) v = dist[xi - 1, zi - 1] + 1;
+            if (xi < sizeX - 1 && zi > 0 && dist[xi + 1, zi - 1] + 1 < v) v = dist[xi + 1, zi - 1] + 1;
+            dist[xi, zi] = v;
+        }
+        for (var xi = sizeX - 1; xi >= 0; xi--)
+        for (var zi = sizeZ - 1; zi >= 0; zi--)
+        {
+            var v = dist[xi, zi];
+            if (xi < sizeX - 1                    && dist[xi + 1, zi    ] + 1 < v) v = dist[xi + 1, zi    ] + 1;
+            if (zi < sizeZ - 1                    && dist[xi,     zi + 1] + 1 < v) v = dist[xi,     zi + 1] + 1;
+            if (xi < sizeX - 1 && zi < sizeZ - 1  && dist[xi + 1, zi + 1] + 1 < v) v = dist[xi + 1, zi + 1] + 1;
+            if (xi > 0         && zi < sizeZ - 1  && dist[xi - 1, zi + 1] + 1 < v) v = dist[xi - 1, zi + 1] + 1;
+            dist[xi, zi] = v;
+        }
+        return dist;
+    }
+
+    // Stamp each cell of every pre-planned river path as a disc of bed
+    // tiles at the fixed river-bed floor. Done after heightmap sampling
+    // so the river cuts through whatever terrain the noise produced.
+    private static void CarveRiversFromPaths(
+        int[,] heights, IReadOnlyList<RiverPath> paths,
+        int sizeX, int sizeZ, int halfX, int halfZ, int minHeight)
+    {
+        var floorH = Math.Max(minHeight, WaterLevelY - RiverBedDepth);
+        foreach (var path in paths)
+        {
+            foreach (var cell in path.Cells)
+            {
+                var cxi = cell.X + halfX;
+                var czi = cell.Z + halfZ;
+                CarveDisc(heights, cxi, czi, RiverBedRadius, floorH, sizeX, sizeZ);
             }
         }
     }

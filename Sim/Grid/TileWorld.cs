@@ -13,6 +13,17 @@ public sealed class TileWorld
     // eviction currently only touches voxel chunks; terrain stays resident.
     private readonly Dictionary<(int cx, int cz), TerrainChunk> _terrainChunks = new();
 
+    // Planned river paths, stamped in by WorldGen after generation runs.
+    // Empty until Generate finishes. Consulted by RiverDebugRenderer to draw
+    // flow-direction arrows and (eventually) by water-wheel / fish systems.
+    public IReadOnlyList<RiverPath> RiverPaths { get; private set; } = Array.Empty<RiverPath>();
+
+    public void SetRiverPaths(IReadOnlyList<RiverPath> paths)
+    {
+        RiverPaths = paths;
+        MutationTick++;
+    }
+
     public int ChunkCount => _chunks.Count;
     public int TerrainChunkCount => _terrainChunks.Count;
     public IEnumerable<KeyValuePair<(int cx, int cz), TerrainChunk>> EnumerateTerrainChunks() => _terrainChunks;
@@ -108,6 +119,7 @@ public sealed class TileWorld
         _cellStates.Clear();
         _chunksByCell.Clear();
         _terrainChunks.Clear();
+        RiverPaths = Array.Empty<RiverPath>();
         MutationTick++;
     }
 

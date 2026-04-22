@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://b0cowcolsimmain"]
+[gd_scene load_steps=12 format=3 uid="uid://b0cowcolsimmain"]
 
 [ext_resource type="Script" path="res://scripts/core/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://scripts/render/GridRenderer.cs" id="2_grid"]
@@ -10,6 +10,7 @@
 [ext_resource type="Script" path="res://scripts/ui/ProfilerHud.cs" id="8_profiler"]
 [ext_resource type="Script" path="res://scripts/ui/TileInfoHud.cs" id="9_tileinfo"]
 [ext_resource type="Script" path="res://scripts/ui/RegenerateButton.cs" id="10_regen"]
+[ext_resource type="Script" path="res://scripts/render/RiverArrowRenderer.cs" id="11_riverarrow"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -52,3 +53,6 @@ script = ExtResource("9_tileinfo")
 
 [node name="RegenerateButton" type="CanvasLayer" parent="."]
 script = ExtResource("10_regen")
+
+[node name="RiverArrowRenderer" type="Node3D" parent="."]
+script = ExtResource("11_riverarrow")
