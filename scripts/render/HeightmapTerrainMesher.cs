@@ -71,34 +71,43 @@ public sealed class HeightmapTerrainMesher
 
             var wx = snap.ChunkX * s + lx;
             var wz = snap.ChunkZ * s + lz;
-            var cell = TileAtlas.CellForTop(topKind, wx, wz);
-            var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-            var tint = TileAtlas.TintFor(topKind);
 
-            var vi = verts.Count;
-            var pSW = new Vector3(x0, ySW, z0);
-            var pSE = new Vector3(x1, ySE, z0);
-            var pNE = new Vector3(x1, yNE, z1);
-            var pNW = new Vector3(x0, yNW, z1);
-            verts.Add(pSW); verts.Add(pSE); verts.Add(pNE); verts.Add(pNW);
+            // Lake tiles emit no top quad — the opaque water plane hides the
+            // bed entirely, so rendering sand geometry under it is pure waste
+            // (and its per-tile corner tilt was reading through the water as
+            // visible slope). Cliff walls still run below so sand banks join
+            // the shore cleanly above the waterline.
+            if (!isWater)
+            {
+                var cell = TileAtlas.CellForTop(topKind, wx, wz);
+                var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
+                var tint = TileAtlas.TintFor(topKind);
 
-            // Flat normal per tile — right-handed cross of (SW→NW) × (SW→SE)
-            // points +Y for a flat quad, tilting toward uphill corners for a
-            // ramp. Shared across both triangles so adjacent tiles with
-            // matching facing corners blend seamlessly.
-            var nrm = (pNW - pSW).Cross(pSE - pSW).Normalized();
-            if (nrm.LengthSquared() < 1e-6f) nrm = Vector3.Up;
-            normals.Add(nrm); normals.Add(nrm); normals.Add(nrm); normals.Add(nrm);
+                var vi = verts.Count;
+                var pSW = new Vector3(x0, ySW, z0);
+                var pSE = new Vector3(x1, ySE, z0);
+                var pNE = new Vector3(x1, yNE, z1);
+                var pNW = new Vector3(x0, yNW, z1);
+                verts.Add(pSW); verts.Add(pSE); verts.Add(pNE); verts.Add(pNW);
 
-            colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
+                // Flat normal per tile — right-handed cross of (SW→NW) × (SW→SE)
+                // points +Y for a flat quad, tilting toward uphill corners for a
+                // ramp. Shared across both triangles so adjacent tiles with
+                // matching facing corners blend seamlessly.
+                var nrm = (pNW - pSW).Cross(pSE - pSW).Normalized();
+                if (nrm.LengthSquared() < 1e-6f) nrm = Vector3.Up;
+                normals.Add(nrm); normals.Add(nrm); normals.Add(nrm); normals.Add(nrm);
 
-            uvs.Add(new Vector2(u0, v0));
-            uvs.Add(new Vector2(u1, v0));
-            uvs.Add(new Vector2(u1, v1));
-            uvs.Add(new Vector2(u0, v1));
+                colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
 
-            indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
-            indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
+                uvs.Add(new Vector2(u0, v0));
+                uvs.Add(new Vector2(u1, v0));
+                uvs.Add(new Vector2(u1, v1));
+                uvs.Add(new Vector2(u0, v1));
+
+                indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
+                indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
+            }
 
             // Cliff walls. Each tile handles its east (+X) and north (+Z)
             // edge. The shared corner pair across the edge is compared to
