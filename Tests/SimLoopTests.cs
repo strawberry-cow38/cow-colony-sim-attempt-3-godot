@@ -35,4 +35,32 @@ public class SimLoopTests
         Assert.Equal(120, steps);
     }
 
+    [Fact]
+    public void Paused_DoesNotStep()
+    {
+        var steps = 0;
+        var loop = new SimLoop(_ => steps++) { IsPaused = true };
+
+        for (var i = 0; i < 60; i++)
+        {
+            loop.Advance(SimConstants.SimDt);
+        }
+
+        Assert.Equal(0, loop.Tick);
+        Assert.Equal(0, steps);
+    }
+
+    [Fact]
+    public void Unpause_ResumesStepping()
+    {
+        var steps = 0;
+        var loop = new SimLoop(_ => steps++) { IsPaused = true };
+
+        for (var i = 0; i < 10; i++) loop.Advance(SimConstants.SimDt);
+        Assert.Equal(0, steps);
+
+        loop.IsPaused = false;
+        for (var i = 0; i < 60; i++) loop.Advance(SimConstants.SimDt);
+        Assert.Equal(60, steps);
+    }
 }

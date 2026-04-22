@@ -9,6 +9,7 @@ public sealed class SimLoop
 
     public int Tick { get; private set; }
     public SimSpeed Speed { get; set; } = SimSpeed.X1;
+    public bool IsPaused { get; set; }
     public int LastStepsExecuted { get; private set; }
     public double Alpha { get; private set; }
 
@@ -19,7 +20,7 @@ public sealed class SimLoop
 
     public void Advance(double realDeltaSeconds)
     {
-        if (realDeltaSeconds <= 0) { LastStepsExecuted = 0; return; }
+        if (realDeltaSeconds <= 0 || IsPaused) { LastStepsExecuted = 0; return; }
 
         _accumulator += realDeltaSeconds * (int)Speed;
 

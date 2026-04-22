@@ -47,7 +47,7 @@ public partial class SimHost : Node
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
-		TimeOfDay.SetTicks((long)(SimConstants.TicksPerDay * 0.30f));
+		TimeOfDay.SetTicks(CalendarSystem.StartTicksOffset);
 		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}, cellsDir={CellStore.PathFor(new CellKey(0, 0))}.");
 	}
 
