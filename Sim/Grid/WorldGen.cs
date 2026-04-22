@@ -12,11 +12,13 @@ public static class WorldGen
     // Sea level. Columns below this fill with Water tiles up to (WaterLevelY-1).
     public const int WaterLevelY = 0;
 
-    // Mountain region onset. MountainMask noise above 0.55 begins ramping into
-    // ridge-shaped peaks; above 0.80 is fully mountainous. Smoothstep-blended.
-    // Raised from 0.45/0.70 to reduce overall mountain coverage per request.
-    private const float MountainOnset = 0.55f;
-    private const float MountainFull  = 0.80f;
+    // Mountain region onset. MountainMask noise above MountainOnset begins
+    // ramping into ridge-shaped peaks; above MountainFull is fully
+    // mountainous. Smoothstep-blended. Raised 0.55/0.80 → 0.68/0.90 on
+    // 2026-04-22 to roughly halve mountain coverage — fewer and smaller
+    // mountainous regions, more open plains between them.
+    private const float MountainOnset = 0.68f;
+    private const float MountainFull  = 0.90f;
 
     // Lake carve. Mask above onset pulls height below sea level; only fires
     // when base elevation is already low AND mountain mask is low so cliff
