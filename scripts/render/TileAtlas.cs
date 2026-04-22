@@ -59,10 +59,12 @@ public static class TileAtlas
     // Vertex-color tint multiplied with the albedo texture (material has
     // vertex_color_use_as_albedo=true). Used to re-color shared atlas cells
     // per TileKind without baking extra cells. Water rides on the white
-    // atlas cell so the multiply lands on a clean blue.
+    // atlas cell so the multiply lands on a clean blue. Alpha < 1 so lake
+    // beds show through — needs GridRenderer's StandardMaterial3D to carry
+    // TransparencyEnum.Alpha for the channel to be honored.
     public static Color TintFor(TileKind kind) => kind switch
     {
-        TileKind.Water => new Color(0.30f, 0.50f, 0.85f, 1f),
+        TileKind.Water => new Color(0.30f, 0.50f, 0.85f, 0.55f),
         _ => Colors.White,
     };
 

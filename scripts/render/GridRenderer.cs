@@ -91,6 +91,9 @@ public sealed partial class GridRenderer : Node3D
         {
             AlbedoTexture = _grassTex,
             VertexColorUseAsAlbedo = true,
+            // Vertex alpha honored → translucent water plane over sand bed.
+            // Land tiles tint with alpha=1 so they render fully opaque.
+            Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
             Roughness = 0.95f,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
         };

@@ -24,18 +24,20 @@ public static class WorldGen
     private const float QuantStart = 15f;
     private const float TierStep   = 6f;  // > CliffDelta so one step = one clean cliff.
 
-    // Ramp blend. Where Ramp noise is high, the quantized tier value lerps
-    // toward the unquantized (raw) height so a tier transition becomes a
-    // smooth slope instead of a hard cliff face. Patches are low-frequency
-    // so each ramp spans several tiles of walkable incline.
-    private const float RampOnset = 0.55f;
-    private const float RampFull  = 0.80f;
+    // Cliff mask. Mountains default to smooth (raw) terrain; only where the
+    // Ramp-noise layer rises above CliffOnset do heights snap to the
+    // quantized tier. High onset → rare cliff patches (~10% of mountain
+    // area). Low-frequency noise means each cliff patch spans several tiles
+    // of continuous tier boundary instead of scattered single-tile spikes.
+    private const float CliffOnset = 0.72f;
+    private const float CliffFull  = 0.85f;
 
     // Lake carve. Mask above onset pulls height below sea level; only fires
     // when base elevation is already low AND mountain mask is low so cliff
-    // feet stay dry (no lakes touching mountain walls).
-    private const float LakeOnset = 0.58f;
-    private const float LakeFull  = 0.78f;
+    // feet stay dry (no lakes touching mountain walls). Wide smoothstep
+    // band → long gradual bank slopes instead of abrupt depth jumps.
+    private const float LakeOnset = 0.50f;
+    private const float LakeFull  = 0.88f;
     private const float LakeMaxBaseH = 8f;
     private const float LakeMountainBuffer = 0.30f;
 
@@ -79,19 +81,20 @@ public static class WorldGen
                     baseH = Lerp(baseH, mountainH, mountainWeight);
                 }
 
-                // Plateau quantization. Step size > CliffDelta so every tier
-                // boundary produces exactly one cliff wall in the mesher.
-                // Ramp blend: where Ramp mask is high, the quantized value
-                // lerps back toward raw so tier boundaries become walkable
-                // slopes over several tiles instead of hard cliffs.
+                // Plateau quantization only inside cliff patches. Default is
+                // the raw smooth baseH; where CliffMask rises above onset the
+                // value lerps toward the tier-quantized floor, producing a
+                // sparse collection of stepped plateaus on an otherwise
+                // smooth mountainside. Step size > CliffDelta so every tier
+                // boundary inside a patch yields exactly one clean cliff.
                 if (baseH > QuantStart)
                 {
                     var over = baseH - QuantStart;
                     var tier = MathF.Floor(over / TierStep) * TierStep;
                     var quantized = QuantStart + tier;
-                    var rampMaskRaw = (noise.Ramp.GetNoise(x, z) + 1f) * 0.5f;
-                    var rampWeight = Smoothstep(RampOnset, RampFull, rampMaskRaw);
-                    baseH = Lerp(quantized, baseH, rampWeight);
+                    var cliffMaskRaw = (noise.Ramp.GetNoise(x, z) + 1f) * 0.5f;
+                    var cliffWeight = Smoothstep(CliffOnset, CliffFull, cliffMaskRaw);
+                    baseH = Lerp(baseH, quantized, cliffWeight);
                 }
 
                 // Detail pass. Capped < CliffDelta so flat plains never spike.
