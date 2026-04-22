@@ -58,11 +58,11 @@ public static class TileAtlas
 
     // Vertex-color tint multiplied with the albedo texture (material has
     // vertex_color_use_as_albedo=true). Water rides on the white atlas
-    // cell so the multiply lands on a clean blue. Alpha=1 → fully opaque
-    // flat plane; no lake bed rendered underneath (see HeightmapTerrainMesher).
+    // cell so the multiply lands on a clean blue. Alpha < 1 → translucent
+    // flat plane over the sand bed.
     public static Color TintFor(TileKind kind) => kind switch
     {
-        TileKind.Water => new Color(0.30f, 0.50f, 0.85f, 1.0f),
+        TileKind.Water => new Color(0.30f, 0.50f, 0.85f, 0.60f),
         _ => Colors.White,
     };
 

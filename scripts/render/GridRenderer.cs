@@ -91,6 +91,10 @@ public sealed partial class GridRenderer : Node3D
         {
             AlbedoTexture = _grassTex,
             VertexColorUseAsAlbedo = true,
+            // DepthPrePass so opaque bed writes depth before translucent
+            // water quads sort against it. Plain Alpha would let water
+            // leak through sloped sand.
+            Transparency = BaseMaterial3D.TransparencyEnum.AlphaDepthPrePass,
             Roughness = 0.95f,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic,
         };
