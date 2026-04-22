@@ -24,12 +24,6 @@ public sealed class TerrainSnapshot
     // Surface kind per tile.
     public readonly byte[,] Kinds = new byte[Size, Size];
 
-    // Water-surface Y per tile, in tile-height units. Meaningful only for
-    // tiles with Kind == Water; rivers at elevation write their local bed+1
-    // here so the mesher can emit a water plane that sits on the river bed
-    // rather than at global sea level.
-    public readonly short[,] WaterTops = new short[Size, Size];
-
     // East rim — for my tile at lx = Size-1, compare my SE/NE against the
     // +X neighbor's tile at lx=0 SW/NW. EastRim[lz, 0] = neighbor SW,
     // EastRim[lz, 1] = neighbor NW. When no +X neighbor exists (world edge),
@@ -40,15 +34,6 @@ public sealed class TerrainSnapshot
     // +Z neighbor's tile at lz=0 SW/SE. NorthRim[lx, 0] = neighbor SW,
     // NorthRim[lx, 1] = neighbor SE.
     public readonly short[,] NorthRim = new short[Size, 2];
-
-    // Per-row neighbor kind + water-top at the east / north chunk seams, so
-    // the mesher can detect water↔water boundaries across chunk edges (for
-    // waterfall curtains). When no neighbor chunk exists, kind defaults to
-    // Empty (0) so no curtain emits at the world border.
-    public readonly byte[]  EastRimKind     = new byte[Size];
-    public readonly short[] EastRimWaterTop = new short[Size];
-    public readonly byte[]  NorthRimKind    = new byte[Size];
-    public readonly short[] NorthRimWaterTop = new short[Size];
 
     public readonly int Revision;
 

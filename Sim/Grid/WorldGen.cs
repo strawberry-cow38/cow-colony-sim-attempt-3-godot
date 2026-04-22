@@ -28,38 +28,17 @@ public static class WorldGen
     private const float LakeMaxBaseH = 6f;
     private const float LakeMountainBuffer = 0.25f;
 
-    // River pass. Sources sampled on a coarse grid; each walks *strict*
-    // downhill with a meander bias among qualifying (nh < curH) neighbors
-    // so rivers never flow uphill. Flow count per cell accumulates across
-    // walks — tributaries that merge onto the same spine fatten naturally.
-    // Walks that step onto a lake cell or reach sea level terminate.
-    // MinH raised to 15 so sources sit in highlands; MaxH 60 to allow
-    // mountain-adjacent springs without dropping into snow-capped peaks.
-    private const int   RiverSampleStride      = 14;
-    private const float RiverSourceThreshold   = 0.55f;
-    private const int   RiverSourceMinH        = 15;
-    private const int   RiverSourceMaxH        = 60;
-    private const int   RiverMaxWalkSteps      = 8192;
-    private const float RiverMeanderWeight     = 1.6f;
-
-    // River widening. Flow count (number of walks that passed through the
-    // cell) maps to a dilation radius so merged tributaries fatten toward
-    // the mouth. Cells near sea level receive a minimum radius to form a
-    // visible estuary fan. Ring dilation skips any neighbor whose natural
-    // terrain sits more than RiverWidenMaxRise tiles above the spine
-    // surface — otherwise widening would carve ditches into hillsides.
-    private const int   RiverFlowMidThreshold  = 3;
-    private const int   RiverFlowHiThreshold   = 8;
-    private const int   RiverWidenRadiusMid    = 1;
-    private const int   RiverWidenRadiusHi     = 2;
-    private const int   RiverEstuaryBand       = 4;
-    private const int   RiverEstuaryRadius     = 2;
-    // Symmetric tolerance: only widen into cells whose natural terrain sits
-    // within this many tiles of the spine surface. Keeps cliffs cliffy and
-    // riverbanks smooth — widening never carves a ditch or backfills a
-    // canyon. Kept strictly less than CliffDelta so the resulting slope
-    // never trips the Cap rule.
-    private const int   RiverWidenTolerance    = 1;
+    // River pass. Sources sampled on a coarse grid; each walks downhill with
+    // a meander bias so paths wind instead of taking the straight gradient.
+    // Flow count per cell accumulates across walks — tributaries that merge
+    // onto the same spine fatten naturally. Walks that step onto a lake cell
+    // terminate, guaranteeing no river↔lake overlap.
+    private const int   RiverSampleStride      = 18;
+    private const float RiverSourceThreshold   = 0.58f;
+    private const int   RiverSourceMinH        = 10;
+    private const int   RiverSourceMaxH        = 55;
+    private const int   RiverMaxWalkSteps      = 4096;
+    private const float RiverMeanderWeight     = 2.2f;
 
     // Detail noise amplitude. Low enough that plains and hills read as
     // gently rolling rather than jagged.
@@ -169,7 +148,7 @@ public static class WorldGen
         for (var zi = 0; zi < sizeZ; zi++)
             isLake[xi, zi] = heights[xi, zi] < WaterLevelY;
 
-        var riverTop = CarveRivers(heights, isLake, noise, sizeX, sizeZ, halfX, halfZ, minHeight);
+        _ = CarveRivers(heights, isLake, noise, sizeX, sizeZ, halfX, halfZ, minHeight);
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
@@ -183,19 +162,13 @@ public static class WorldGen
             var x = xi - halfX;
             var z = zi - halfZ;
 
-            // River cells have a locally elevated water surface carved by
-            // CarveRivers. rTop > 0 means water fills from `height` up to
-            // `rTop - 1`; the mesher renders the surface plane at rTop.
-            var rTop = riverTop[xi, zi];
-            var isRiver = rTop > 0;
-
             // Shore detection: a land column within 2 tiles of sea level with
             // any submerged 8-neighbor is painted sand instead of grass.
             // Lake-bed columns (height < WaterLevelY) are always sand — the
             // water plane renders separately on top.
             var isLakeBed = height < WaterLevelY;
             var isShore = false;
-            if (!isLakeBed && !isRiver && height <= WaterLevelY + 2)
+            if (!isLakeBed && height <= WaterLevelY + 2)
             {
                 for (var dz = -1; dz <= 1 && !isShore; dz++)
                 for (var dx = -1; dx <= 1 && !isShore; dx++)
@@ -208,31 +181,26 @@ public static class WorldGen
                 }
             }
 
-            var floorTile = (isLakeBed || isShore || isRiver) ? sand : grass;
+            var floorTile = (isLakeBed || isShore) ? sand : grass;
             var rockBase = Math.Min(0, height - 3);
             for (var y = rockBase; y < height - 1; y++)
             {
                 tiles.Set(new TilePos(x, y, z), solid);
             }
             tiles.Set(new TilePos(x, height - 1, z), floorTile);
-            // Water fill: up to local river top if river, otherwise up to
-            // global sea level. For dry land both loops are empty.
-            var localWaterTop = isRiver ? rTop : WaterLevelY;
-            for (var y = height; y < localWaterTop; y++)
+            for (var y = height; y < WaterLevelY; y++)
             {
                 tiles.Set(new TilePos(x, y, z), water);
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            // Water-kind columns (lake, ocean, river) tag Water so the mesher
-            // emits a water plane. WaterTop carries the per-column surface Y
-            // so rivers at elevation render at their bed+1 rather than sea.
-            var surfaceKind = (isLakeBed || isRiver)
+            // Lake-bed columns tag kind = Water to signal the mesher to emit
+            // a water-plane overlay at WaterLevelY; the bed itself still
+            // renders with sand top + walls.
+            var surfaceKind = isLakeBed
                 ? TileKind.Water
                 : (isShore ? TileKind.Sand : TileKind.Floor);
             tiles.SetTerrainKind(x, z, surfaceKind);
-            if (isRiver)
-                tiles.SetWaterTop(x, z, (short)rTop);
 
             surfaceTiles++;
         }
@@ -260,24 +228,17 @@ public static class WorldGen
         return surfaceTiles;
     }
 
-    // v2 rivers. Sources seed on a coarse grid inside a highland band; each
-    // walks *strict*-downhill (no uphill, no flat) with a meander bias among
-    // qualifying neighbors. Flow accumulates per cell so tributaries fatten
-    // merges downstream. Returns a per-cell waterTop array — 0 = not a
-    // river, >0 = the river's water-surface Y in tile units. The caller
-    // writes per-column water-top into TileWorld so the mesher emits local
-    // water planes instead of one global sea-level quad.
-    //
-    // Rivers never flow uphill — if no descending neighbor exists, the walk
-    // terminates at that cell. They also terminate at lake cells or at any
-    // cell already at / below sea level (ocean / estuary mouth).
+    // Seed rivers on a coarse grid, walk each source downhill with a meander
+    // bias, accumulate flow per cell, then carve the river bed. Paths that
+    // step onto a lake cell terminate (no river↔lake overlap). Width and
+    // depth scale with accumulated flow so merged tributaries read as a
+    // bigger river downstream.
     private static int[,] CarveRivers(
         int[,] heights, bool[,] isLake, NoiseStack noise,
         int sizeX, int sizeZ, int halfX, int halfZ, int minHeight)
     {
         var flow = new int[sizeX, sizeZ];
-        var riverTop = new int[sizeX, sizeZ];
-        var visited = new int[sizeX, sizeZ];
+        var visited = new int[sizeX, sizeZ];      // generation per walk
         var gen = 0;
         int[] dxs = { -1, 0, 1, -1, 1, -1, 0, 1 };
         int[] dzs = { -1, -1, -1, 0, 0, 1, 1, 1 };
@@ -285,6 +246,7 @@ public static class WorldGen
         for (var sxi = RiverSampleStride / 2; sxi < sizeX; sxi += RiverSampleStride)
         for (var szi = RiverSampleStride / 2; szi < sizeZ; szi += RiverSampleStride)
         {
+            // Find the strongest source candidate inside this grid cell.
             var bestXi = -1; var bestZi = -1; var bestScore = float.NegativeInfinity;
             var lo = -RiverSampleStride / 2;
             var hi = RiverSampleStride / 2;
@@ -311,10 +273,7 @@ public static class WorldGen
                 if (visited[cxi, czi] == gen) break;
                 visited[cxi, czi] = gen;
                 flow[cxi, czi]++;
-
-                // Terminate on lake, ocean (sub-sea) or already visited.
                 if (isLake[cxi, czi]) break;
-                if (heights[cxi, czi] <= WaterLevelY) break;
 
                 var wx = cxi - halfX; var wz = czi - halfZ;
                 var mAng = (noise.Meander.GetNoise(wx, wz) + 1f) * MathF.PI;
@@ -323,122 +282,71 @@ public static class WorldGen
 
                 var curH = heights[cxi, czi];
                 var bestK = -1; var bestKScore = float.PositiveInfinity;
+                var bestKH = 0;
                 for (var k = 0; k < 8; k++)
                 {
                     var nxi = cxi + dxs[k]; var nzi = czi + dzs[k];
                     if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
                     if (visited[nxi, nzi] == gen) continue;
                     var nh = heights[nxi, nzi];
-                    // Strict: neighbor must be lower than current cell.
-                    // Equal-height or uphill steps are forbidden.
-                    if (nh >= curH) continue;
-
                     var invLen = 1f / MathF.Sqrt(dxs[k] * dxs[k] + dzs[k] * dzs[k]);
                     var align = (dxs[k] * pdx + dzs[k] * pdz) * invLen;
-                    // Lower nh is better; alignment with meander is a small
-                    // tiebreaker that picks between equally-low neighbors.
                     var score = nh - align * RiverMeanderWeight;
-                    if (score < bestKScore) { bestKScore = score; bestK = k; }
+                    if (score < bestKScore) { bestKScore = score; bestK = k; bestKH = nh; }
                 }
-                if (bestK < 0) break;  // local pit — river ends here
+                if (bestK < 0) break;
+                // Local minimum: neighbor noticeably higher means we're stuck in
+                // a pit. End the river rather than flooding uphill.
+                if (bestKH > curH + 2) break;
                 cxi += dxs[bestK];
                 czi += dzs[bestK];
             }
         }
 
-        // Widen pass. Flow accumulation tells us which spine cells carry the
-        // most water; cells near sea level get a minimum radius so the mouth
-        // fans out as an estuary. We stamp a disc of that radius around each
-        // spine cell into widenedTop, recording the spine's pre-carve
-        // surface. Ring cells are skipped when their natural terrain is more
-        // than RiverWidenMaxRise tiles above the spine surface (so widening
-        // doesn't carve ditches into hillsides).
-        var widenedTop = new int[sizeX, sizeZ];
+        // Carve. For each cell with flow, drop height below sea level and
+        // stamp a small disk for width. Skip lake cells so rivers never
+        // overwrite them. Gated on lowland (same LakeMaxBaseH threshold as
+        // the lake carve) so rivers only become visible near water level —
+        // upstream cells still accumulate flow but keep their terrain so
+        // bank cliffs stay bounded.
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
             var f = flow[xi, zi];
             if (f <= 0) continue;
             if (isLake[xi, zi]) continue;
-            if (heights[xi, zi] <= WaterLevelY) continue;
+            if (heights[xi, zi] > LakeMaxBaseH) continue;
 
-            var surface = heights[xi, zi];
-            var radius = f >= RiverFlowHiThreshold
-                ? RiverWidenRadiusHi
-                : (f >= RiverFlowMidThreshold ? RiverWidenRadiusMid : 0);
-            if (surface <= WaterLevelY + RiverEstuaryBand && radius < RiverEstuaryRadius)
-                radius = RiverEstuaryRadius;
+            var widthR = Math.Min(3, f / 2);
+            var depth = Math.Min(3, 1 + f / 4);
+            var floorH = WaterLevelY - depth;
+            if (floorH < minHeight) floorH = minHeight;
 
-            // Always seed the spine cell itself.
-            if (widenedTop[xi, zi] == 0 || widenedTop[xi, zi] > surface)
-                widenedTop[xi, zi] = surface;
-            if (radius == 0) continue;
-
-            var r2 = radius * radius;
-            for (var dx = -radius; dx <= radius; dx++)
-            for (var dz = -radius; dz <= radius; dz++)
+            for (var dx = -widthR; dx <= widthR; dx++)
+            for (var dz = -widthR; dz <= widthR; dz++)
             {
-                if (dx == 0 && dz == 0) continue;
-                if (dx * dx + dz * dz > r2) continue;
-                var txi = xi + dx;
-                var tzi = zi + dz;
-                if ((uint)txi >= (uint)sizeX || (uint)tzi >= (uint)sizeZ) continue;
-                if (isLake[txi, tzi]) continue;
-                if (heights[txi, tzi] <= WaterLevelY) continue;
-                // Only widen into cells close to the spine surface. Skips
-                // hillsides (too high → trench) and canyons (too low →
-                // backfill). Kept within CliffDelta so Cap doesn't emit an
-                // artificial cliff along the widened bank.
-                var delta = heights[txi, tzi] - surface;
-                if (delta > RiverWidenTolerance) continue;
-                if (delta < -RiverWidenTolerance) continue;
-                // Lowest surface wins, so when two tributaries merge the
-                // downstream (lower) surface takes over — no upstream bump.
-                if (widenedTop[txi, tzi] == 0 || widenedTop[txi, tzi] > surface)
-                    widenedTop[txi, tzi] = surface;
+                if (dx * dx + dz * dz > widthR * widthR + 1) continue;
+                var nxi = xi + dx; var nzi = zi + dz;
+                if ((uint)nxi >= (uint)sizeX || (uint)nzi >= (uint)sizeZ) continue;
+                if (isLake[nxi, nzi]) continue;
+                if (heights[nxi, nzi] > LakeMaxBaseH) continue;
+                if (heights[nxi, nzi] <= floorH) continue;
+                heights[nxi, nzi] = floorH;
             }
         }
-
-        // Carve pass. For each widened cell, record the river surface =
-        // the (possibly inherited) spine surface, then drop the bed by one
-        // tile so a water tile forms on top. The mesher emits the water
-        // plane at the recorded surface; banks remain at surrounding terrain,
-        // giving a waterline that sits just below grass. Cross-cell steps in
-        // surface Y become natural waterfalls via the cliff Cap rule.
-        for (var xi = 0; xi < sizeX; xi++)
-        for (var zi = 0; zi < sizeZ; zi++)
-        {
-            var surface = widenedTop[xi, zi];
-            if (surface <= 0) continue;
-            if (isLake[xi, zi]) continue;
-            if (heights[xi, zi] <= WaterLevelY) continue;
-
-            var bedH = surface - 1;
-            if (bedH < minHeight) bedH = minHeight;
-            heights[xi, zi] = bedH;
-            riverTop[xi, zi] = surface;
-        }
-        return riverTop;
+        return flow;
     }
 
-    // Shore- + waterfall-aware clamp. Default: use the neighbor's height so
-    // land-land and lake-lake boundaries share a corner and produce smooth
-    // slopes. Clamp to own height in two cases:
-    //   1) The boundary crosses sea level (shore ↔ lakebed). Keeps a crisp
-    //      waterline between dry land and submerged basin.
-    //   2) The gap is ≥ <see cref="SimConstants.CliffDelta"/> tiles. Lets
-    //      river waterfalls emerge as vertical walls when a river bed drops
-    //      multiple tiles between adjacent cells, without relying on
-    //      plateau quantization.
-    // Ridge-noise mountains don't produce 3+ tile gaps cell-to-cell at the
-    // current frequency/gain, so (2) rarely fires outside river cliffs.
+    // Shore-aware clamp. Use the neighbor's height directly so land-land and
+    // lake-lake boundaries produce a shared corner — smooth mountains, no
+    // random mid-slope cliffs. Only clamp when the boundary crosses sea
+    // level (shore ↔ lakebed) so the waterline is a crisp cliff the mesher
+    // can pick up, while the rest of the terrain blends continuously.
     private static int Cap(int candidate, int own)
     {
         var ownDry = own >= WaterLevelY;
         var candDry = candidate >= WaterLevelY;
-        if (ownDry != candDry) return own;
-        if (Math.Abs(candidate - own) >= SimConstants.CliffDelta) return own;
-        return candidate;
+        return ownDry != candDry ? own : candidate;
     }
 
     public static int SurfaceY(TileWorld tiles, int x, int z, int maxProbe = 128, int minProbe = -16)

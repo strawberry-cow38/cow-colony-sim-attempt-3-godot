@@ -158,65 +158,8 @@ public sealed class HeightmapTerrainMesher
 
             if (isWater)
             {
-                // Per-tile water-top: rivers at elevation write their local
-                // surface height; lakes / ocean leave it at 0 = sea level.
-                var waterTopTile = snap.WaterTops[lx, lz];
-                var waterTopY = (waterTopTile != 0 ? waterTopTile : (short)WorldGen.WaterLevelY);
                 EmitWaterPlane(wVerts, wNormals, wColors, wUvs, wIndices,
-                    x0, z0, x1, z1, wx, wz, waterTopY);
-
-                // Waterfall curtains. Where an adjacent tile is also water
-                // but its surface sits CliffDelta+ tiles lower/higher, emit
-                // a translucent vertical quad on the east / north face so
-                // the river's descent reads as a visible falling column
-                // instead of just a terrain cliff with water resting on top.
-                // Only the higher side emits (skip when neighbor is higher)
-                // so each drop is drawn exactly once.
-                TileKind eKind; short eTopTile;
-                if (lx + 1 < s)
-                {
-                    eKind    = (TileKind)snap.Kinds[lx + 1, lz];
-                    eTopTile = snap.WaterTops[lx + 1, lz];
-                }
-                else
-                {
-                    eKind    = (TileKind)snap.EastRimKind[lz];
-                    eTopTile = snap.EastRimWaterTop[lz];
-                }
-                if (eKind == TileKind.Water)
-                {
-                    var eTopY = (eTopTile != 0 ? eTopTile : (short)WorldGen.WaterLevelY);
-                    var dEast = waterTopY - eTopY;
-                    if (dEast >= SimConstants.CliffDelta)
-                        EmitWaterCurtainX(wVerts, wNormals, wColors, wUvs, wIndices,
-                            x1, z0, z1, loY: eTopY, hiY: waterTopY, wx, wz, facePlus: true);
-                    else if (-dEast >= SimConstants.CliffDelta)
-                        EmitWaterCurtainX(wVerts, wNormals, wColors, wUvs, wIndices,
-                            x1, z0, z1, loY: waterTopY, hiY: eTopY, wx, wz, facePlus: false);
-                }
-
-                TileKind nKind; short nTopTile;
-                if (lz + 1 < s)
-                {
-                    nKind    = (TileKind)snap.Kinds[lx, lz + 1];
-                    nTopTile = snap.WaterTops[lx, lz + 1];
-                }
-                else
-                {
-                    nKind    = (TileKind)snap.NorthRimKind[lx];
-                    nTopTile = snap.NorthRimWaterTop[lx];
-                }
-                if (nKind == TileKind.Water)
-                {
-                    var nTopY = (nTopTile != 0 ? nTopTile : (short)WorldGen.WaterLevelY);
-                    var dNorth = waterTopY - nTopY;
-                    if (dNorth >= SimConstants.CliffDelta)
-                        EmitWaterCurtainZ(wVerts, wNormals, wColors, wUvs, wIndices,
-                            x0, x1, z1, loY: nTopY, hiY: waterTopY, wx, wz, facePlus: true);
-                    else if (-dNorth >= SimConstants.CliffDelta)
-                        EmitWaterCurtainZ(wVerts, wNormals, wColors, wUvs, wIndices,
-                            x0, x1, z1, loY: waterTopY, hiY: nTopY, wx, wz, facePlus: false);
-                }
+                    x0, z0, x1, z1, wx, wz);
             }
         }
 
@@ -281,19 +224,16 @@ public sealed class HeightmapTerrainMesher
         // case not produced by the Cap rule on well-formed worldgen.
     }
 
-    // Flat water-plane quad at `waterTopY - WaterTopDropMeters`. One per
-    // water tile; adjacent tiles with matching waterTopY abut across shared
-    // edges so the combined surface reads as a single continuous plane.
-    // Rivers at elevation pass their local waterTopY here; lakes / ocean
-    // pass WaterLevelY so the global sea surface stays flat.
+    // Flat water-plane quad at WaterLevelY - WaterTopDropMeters. One per
+    // lake tile; they abut across shared edges so the combined surface reads
+    // as a single continuous water plane pooling inside the basin.
     private static void EmitWaterPlane(
         List<Vector3> verts, List<Vector3> normals, List<Color> colors,
         List<Vector2> uvs, List<int> indices,
-        float x0, float z0, float x1, float z1, int wx, int wz,
-        short waterTopY)
+        float x0, float z0, float x1, float z1, int wx, int wz)
     {
         const float th = SimConstants.TileHeightMeters;
-        var wY = waterTopY * th - WaterTopDropMeters;
+        var wY = WorldGen.WaterLevelY * th - WaterTopDropMeters;
 
         var cell = TileAtlas.CellForTop(TileKind.Water, wx, wz);
         var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
@@ -311,81 +251,6 @@ public sealed class HeightmapTerrainMesher
         uvs.Add(new Vector2(u1, v0));
         uvs.Add(new Vector2(u1, v1));
         uvs.Add(new Vector2(u0, v1));
-        indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
-        indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
-    }
-
-    // Waterfall curtain on the east face of a water tile. facePlus=true ⇒
-    // self is the higher side and curtain normal points +X (toward the
-    // lower east neighbor); facePlus=false ⇒ neighbor is higher and the
-    // curtain faces -X (toward self, the lower side). Winding reverses to
-    // match the flipped normal. Emitted into the translucent water bucket
-    // so it sorts with the water plane.
-    private static void EmitWaterCurtainX(
-        List<Vector3> verts, List<Vector3> normals, List<Color> colors,
-        List<Vector2> uvs, List<int> indices,
-        float x1, float z0, float z1, short loY, short hiY, int wx, int wz,
-        bool facePlus)
-    {
-        const float th = SimConstants.TileHeightMeters;
-        var yLo = loY * th - WaterTopDropMeters;
-        var yHi = hiY * th - WaterTopDropMeters;
-
-        var cell = TileAtlas.CellForTop(TileKind.Water, wx, wz);
-        var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-        var tint = TileAtlas.TintFor(TileKind.Water);
-        var normal = new Vector3(facePlus ? 1f : -1f, 0f, 0f);
-
-        var za = facePlus ? z1 : z0;
-        var zb = facePlus ? z0 : z1;
-
-        var vi = verts.Count;
-        verts.Add(new Vector3(x1, yLo, za));
-        verts.Add(new Vector3(x1, yHi, za));
-        verts.Add(new Vector3(x1, yHi, zb));
-        verts.Add(new Vector3(x1, yLo, zb));
-        normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
-        colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
-        uvs.Add(new Vector2(u0, v1));
-        uvs.Add(new Vector2(u0, v0));
-        uvs.Add(new Vector2(u1, v0));
-        uvs.Add(new Vector2(u1, v1));
-        indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
-        indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
-    }
-
-    // Waterfall curtain on the north face, symmetric to EmitWaterCurtainX.
-    // facePlus=true ⇒ self is higher, normal +Z (toward lower north
-    // neighbor); facePlus=false ⇒ neighbor higher, normal -Z.
-    private static void EmitWaterCurtainZ(
-        List<Vector3> verts, List<Vector3> normals, List<Color> colors,
-        List<Vector2> uvs, List<int> indices,
-        float x0, float x1, float z1, short loY, short hiY, int wx, int wz,
-        bool facePlus)
-    {
-        const float th = SimConstants.TileHeightMeters;
-        var yLo = loY * th - WaterTopDropMeters;
-        var yHi = hiY * th - WaterTopDropMeters;
-
-        var cell = TileAtlas.CellForTop(TileKind.Water, wx, wz);
-        var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-        var tint = TileAtlas.TintFor(TileKind.Water);
-        var normal = new Vector3(0f, 0f, facePlus ? 1f : -1f);
-
-        var xa = facePlus ? x0 : x1;
-        var xb = facePlus ? x1 : x0;
-
-        var vi = verts.Count;
-        verts.Add(new Vector3(xa, yLo, z1));
-        verts.Add(new Vector3(xa, yHi, z1));
-        verts.Add(new Vector3(xb, yHi, z1));
-        verts.Add(new Vector3(xb, yLo, z1));
-        normals.Add(normal); normals.Add(normal); normals.Add(normal); normals.Add(normal);
-        colors.Add(tint); colors.Add(tint); colors.Add(tint); colors.Add(tint);
-        uvs.Add(new Vector2(u0, v1));
-        uvs.Add(new Vector2(u0, v0));
-        uvs.Add(new Vector2(u1, v0));
-        uvs.Add(new Vector2(u1, v1));
         indices.Add(vi + 0); indices.Add(vi + 1); indices.Add(vi + 2);
         indices.Add(vi + 0); indices.Add(vi + 2); indices.Add(vi + 3);
     }

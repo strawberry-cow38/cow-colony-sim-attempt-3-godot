@@ -119,19 +119,14 @@ public class WorldGenTests
         // matches the voxel surface. Land columns: SurfaceY returns y above
         // topmost grass/sand (== stored height). Lake columns: SurfaceY
         // returns WaterLevelY (top of water fill); stored height is the
-        // column's dry floor below sea level. River columns: stored height
-        // is the carved bed; SurfaceY returns the river water-top
-        // (WaterTopAt), which sits one tile above the bed.
+        // column's dry floor below sea level.
         for (var x = -16; x < 16; x++)
         for (var z = -16; z < 16; z++)
         {
             var h = world.TerrainHeightAt(x, z);
             var surfaceY = WorldGen.SurfaceY(world, x, z);
-            var rTop = world.WaterTopAt(x, z);
             if (h < WorldGen.WaterLevelY)
                 Assert.Equal(WorldGen.WaterLevelY, surfaceY);
-            else if (rTop > 0)
-                Assert.Equal((int)rTop, surfaceY);
             else
                 Assert.Equal(h, surfaceY);
         }
@@ -148,19 +143,13 @@ public class WorldGenTests
         {
             var h = world.TerrainHeightAt(x, z);
             var kind = world.TerrainKindAt(x, z);
-            var rTop = world.WaterTopAt(x, z);
             if (h < WorldGen.WaterLevelY)
             {
                 Assert.Equal(TileKind.Water, kind);
             }
-            else if (rTop > 0)
-            {
-                // River column — land-height bed topped by water fill.
-                Assert.Equal(TileKind.Water, kind);
-            }
             else
             {
-                // Dry land columns carry Floor or Sand — never Water / Solid /
+                // Land columns carry Floor or Sand — never Water / Solid /
                 // Empty — so the mesher can branch on kind alone.
                 Assert.True(kind == TileKind.Floor || kind == TileKind.Sand,
                     $"({x},{z}) h={h} kind={kind}");
