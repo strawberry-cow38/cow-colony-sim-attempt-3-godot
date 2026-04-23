@@ -106,12 +106,19 @@ public sealed partial class WorldMapHud : CanvasLayer
         {
             var cell = _sim.Overworld.Get(cx, cz);
             var biome = BiomeRegistry.Get(cell.BiomeId);
-            _hoverLabel.Text = $"({cx},{cz}) {biome.Name}  {cell.TemperatureC:0.0}°C  {cell.RainfallMm:0}mm";
+            var label = cell.IsOcean ? "Ocean" : biome.Name;
+            _hoverLabel.Text = $"({cx},{cz}) {label}  {cell.TemperatureC:0.0}°C  {cell.RainfallMm:0}mm";
         }
 
         var here = _sim.CurrentMapCoord;
         _marker.Position = new Vector2(here.X * PixelsPerCell, here.Z * PixelsPerCell);
     }
+
+    // Ocean depth ramp: shallow shelf (cyan-teal) → deep water (near-black
+    // navy). Elevation is negative under ocean; the deeper it goes, the
+    // darker the pixel reads on the overworld.
+    private static readonly Color OceanShallow = new(0.25f, 0.55f, 0.78f);
+    private static readonly Color OceanDeep    = new(0.05f, 0.12f, 0.28f);
 
     private void RebuildTexture()
     {
@@ -120,8 +127,21 @@ public sealed partial class WorldMapHud : CanvasLayer
         for (var x = 0; x < WorldMap.Width; x++)
         {
             var cell = _sim.Overworld.Get(x, z);
-            var b = BiomeRegistry.Get(cell.BiomeId);
-            img.SetPixel(x, z, new Color(b.DebugR, b.DebugG, b.DebugB));
+            Color px;
+            if (cell.IsOcean)
+            {
+                // Elevation is the raw continent-plus-bias value; under
+                // threshold it goes negative. Clamp to [-1, 0] and map to
+                // shallow→deep so the ramp saturates before runaway lows.
+                var t = Mathf.Clamp(-cell.Elevation, 0f, 1f);
+                px = OceanShallow.Lerp(OceanDeep, t);
+            }
+            else
+            {
+                var b = BiomeRegistry.Get(cell.BiomeId);
+                px = new Color(b.DebugR, b.DebugG, b.DebugB);
+            }
+            img.SetPixel(x, z, px);
         }
         _texture = ImageTexture.CreateFromImage(img);
         _mapImage.Texture = _texture;

@@ -27,7 +27,8 @@ public class ClimateTests
         // = cell rain + river boost, so it stays ≥ cell rain everywhere.
         var tiles = new TileWorld();
         var mapCell = new WorldMapCell(
-            BiomeBuiltins.GrasslandId, TemperatureC: 12f, RainfallMm: 500f);
+            BiomeBuiltins.GrasslandId, TemperatureC: 12f, RainfallMm: 500f,
+            Elevation: 0.5f, IsOcean: false);
         WorldGen.Generate(tiles, seed: 7, sizeX: 64, sizeZ: 64, mapCell: mapCell);
 
         for (var x = -32; x < 32; x += 8)
