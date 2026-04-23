@@ -91,17 +91,25 @@ public static class WorldGen
     private const int   CoastRadiusTiles  = 48;
     private const float CoastFloor        = -5f;
 
-    // Climate. Latitude-driven base temperature plus a slow noise wobble and
-    // an elevation lapse. Rainfall is low-freq noise biased up near rivers.
-    // These are *mean annual* values stamped once at worldgen; a later
-    // weather system can animate deltas on top.
+    // Climate. Latitude-driven base temperature plus a slow noise wobble.
+    // Rainfall is low-freq noise biased up near rivers. Both are sampled
+    // **per cell** (one value per 256×256 tile cell) so biomes are blocky,
+    // one-biome-per-cell — no per-tile crossover fuzz. Sampled once at
+    // worldgen from the cell center; a later weather system can animate
+    // deltas on top. Elevation no longer affects the stored temperature —
+    // snowy peaks come from the SnowPeakHeightTiles override below.
     //
     // Latitude runs along the Z axis: |z|/halfZ = 0 at the equator, 1 at the
     // pole. EquatorC warms the tropics, PoleC cools the arctic rim.
     public const float TempEquatorC   = 28f;
     public const float TempPoleC      = -20f;
     public const float TempNoiseAmpC  = 4f;
-    public const float TempLapsePerTileAboveSea = 0.35f;
+
+    // Snow cap override. Cells are one-biome-each, but any tile rising more
+    // than this many tiles above sea level re-tags as Snow regardless of
+    // its cell's biome — gives mountains white peaks inside e.g. a jungle
+    // or savanna cell without splitting the cell into sub-biomes.
+    public const int   SnowPeakHeightTiles = 60;
 
     public const float RainMinMm      = 0f;
     public const float RainMaxMm      = 2500f;
@@ -223,22 +231,36 @@ public static class WorldGen
         LowerBanks(heights, sizeX, sizeZ);
         tiles.SetRiverPaths(riverPaths);
 
-        // Climate pass — run after heights are finalized so the lapse rate
-        // uses the carved/lowered surface, not the raw noise column. Pure
-        // per-column sample (noise + finalized height + river-distance
-        // field), safe to parallelize.
-        var temperature = new float[sizeX, sizeZ];
-        var rainfall    = new float[sizeX, sizeZ];
-        Parallel.For(0, sizeX, xi =>
+        // Climate pass — one sample per 256×256 cell, taken at the cell
+        // center. Biome is classified once per cell so the world reads as
+        // blocky biome patches instead of per-tile crossover fuzz. Snow on
+        // mountain peaks comes from the per-tile SnowPeakHeightTiles
+        // override below, not from a separate cell-level sample.
+        var firstCellX = FloorDiv(-halfX, Cell.SizeTiles);
+        var firstCellZ = FloorDiv(-halfZ, Cell.SizeTiles);
+        var lastCellX  = FloorDiv(halfX - 1, Cell.SizeTiles);
+        var lastCellZ  = FloorDiv(halfZ - 1, Cell.SizeTiles);
+        var cellsX = lastCellX - firstCellX + 1;
+        var cellsZ = lastCellZ - firstCellZ + 1;
+        var cellTemp  = new float[cellsX, cellsZ];
+        var cellRain  = new float[cellsX, cellsZ];
+        var cellBiome = new byte [cellsX, cellsZ];
+        Parallel.For(0, cellsX, cxi =>
         {
-            for (var zi = 0; zi < sizeZ; zi++)
+            for (var czi = 0; czi < cellsZ; czi++)
             {
-                var x = xi - halfX;
-                var z = zi - halfZ;
-                SampleClimate(noise, x, z, heights[xi, zi], riverDist[xi, zi],
+                var cx = firstCellX + cxi;
+                var cz = firstCellZ + czi;
+                // Cell-center world tile coords (cells span [cx*S, cx*S+S)).
+                var wcx = cx * Cell.SizeTiles + Cell.SizeTiles / 2;
+                var wcz = cz * Cell.SizeTiles + Cell.SizeTiles / 2;
+                var rxi = Math.Clamp(wcx + halfX, 0, sizeX - 1);
+                var rzi = Math.Clamp(wcz + halfZ, 0, sizeZ - 1);
+                SampleClimate(noise, wcx, wcz, riverDist[rxi, rzi],
                     halfZ, out var tempC, out var rainMm);
-                temperature[xi, zi] = tempC;
-                rainfall[xi, zi]    = rainMm;
+                cellTemp[cxi, czi]  = tempC;
+                cellRain[cxi, czi]  = rainMm;
+                cellBiome[cxi, czi] = BiomeClassifier.Pick(tempC, rainMm);
             }
         });
 
@@ -286,8 +308,19 @@ public static class WorldGen
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            tiles.SetTerrainClimate(x, z, temperature[xi, zi], rainfall[xi, zi]);
-            tiles.SetTerrainBiome(x, z, BiomeClassifier.Pick(temperature[xi, zi], rainfall[xi, zi]));
+            // One climate + biome per cell. Snow-peak override promotes any
+            // tile rising SnowPeakHeightTiles above sea level to Snow so
+            // tall mountains keep their white caps regardless of the host
+            // cell's biome.
+            var cxi = FloorDiv(x, Cell.SizeTiles) - firstCellX;
+            var czi = FloorDiv(z, Cell.SizeTiles) - firstCellZ;
+            var tempC  = cellTemp[cxi, czi];
+            var rainMm = cellRain[cxi, czi];
+            var biome  = cellBiome[cxi, czi];
+            if (height - WaterLevelY >= SnowPeakHeightTiles)
+                biome = BiomeBuiltins.SnowId;
+            tiles.SetTerrainClimate(x, z, tempC, rainMm);
+            tiles.SetTerrainBiome(x, z, biome);
             // Lake-bed columns tag kind = Water to signal the mesher to emit
             // a water-plane overlay at WaterLevelY; the bed itself still
             // renders with sand top + walls.
@@ -715,15 +748,13 @@ public static class WorldGen
     }
 
     private static void SampleClimate(
-        NoiseStack noise, int x, int z, int height, int riverDist,
+        NoiseStack noise, int x, int z, int riverDist,
         int halfZ, out float tempC, out float rainMm)
     {
         var latFrac = halfZ > 0 ? Math.Min(1f, Math.Abs(z) / (float)halfZ) : 0f;
         var latT = Lerp(TempEquatorC, TempPoleC, latFrac);
         var tNoise = noise.Temperature.GetNoise(x, z) * TempNoiseAmpC;
-        var heightAboveSea = Math.Max(0, height - WaterLevelY);
-        var lapse = heightAboveSea * TempLapsePerTileAboveSea;
-        tempC = latT + tNoise - lapse;
+        tempC = latT + tNoise;
 
         var rRaw = (noise.Rainfall.GetNoise(x, z) + 1f) * 0.5f;
         var baseRain = Lerp(RainMinMm, RainMaxMm, rRaw);
@@ -731,6 +762,8 @@ public static class WorldGen
                          * RainRiverBoostMm;
         rainMm = Math.Clamp(baseRain + riverBoost, RainMinMm, RainMaxMm + RainRiverBoostMm);
     }
+
+    private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);
 
     private static float Smoothstep(float edge0, float edge1, float x)
     {

@@ -15,12 +15,7 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
-	// 30 cells per side × 256 tiles per cell = 7680 tiles = ~11.5km span.
-	// Runtime cost stays roughly flat — sim tick only walks LIVE/AMBIENT
-	// cells, and GridRenderer caps draw at MaxChunkDistance — but worldgen
-	// scales linearly with tile count so regen is noticeably slower at this
-	// size.
-	public const int WorldSize = 7680;
+	public const int WorldSize = 1600;
 	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 

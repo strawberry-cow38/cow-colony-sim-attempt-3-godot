@@ -1,3 +1,4 @@
+using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Grid;
 using Xunit;
 
@@ -21,45 +22,41 @@ public class ClimateTests
     [Fact]
     public void Temperature_DropsWithLatitude()
     {
+        // 1024×1024 so the two sample strips land in different cells (cells
+        // are 256 tiles across — on a 128-tile world every sample lands in
+        // the same cell and temperature is uniform).
         var tiles = new TileWorld();
-        WorldGen.Generate(tiles, seed: 7, sizeX: 128, sizeZ: 128);
+        WorldGen.Generate(tiles, seed: 7, sizeX: 1024, sizeZ: 1024);
 
-        // Average a band near the equator vs. a band near the north pole. The
-        // noise wobble is ±4°C but the latitude swing is ±24°C, so averaged
-        // over a strip the trend must show through.
         var equatorSum = 0f;
         var poleSum = 0f;
         for (var x = -32; x < 32; x++)
         {
             equatorSum += tiles.TemperatureAt(x, 0);
-            poleSum += tiles.TemperatureAt(x, 60);
+            poleSum += tiles.TemperatureAt(x, 480);
         }
         Assert.True(equatorSum / 64f > poleSum / 64f + 10f,
             $"equator avg {equatorSum / 64f:0.0} not clearly warmer than pole avg {poleSum / 64f:0.0}");
     }
 
     [Fact]
-    public void Temperature_DropsWithElevation()
+    public void SnowBiome_AppearsOnTallPeaks()
     {
-        // Same seed, compare a sea-level coastal tile against a mountainous
-        // interior tile. The lapse (0.35°C per tile) dominates the ±4°C noise
-        // by the time we hit the central mountain band.
+        // Climate is one-biome-per-cell, but tiles rising above
+        // SnowPeakHeightTiles re-tag as Snow regardless of their cell's
+        // biome — so every tall peak in any biome should come back Snow.
         var tiles = new TileWorld();
         WorldGen.Generate(tiles, seed: 42, sizeX: 256, sizeZ: 256);
 
-        var lowT = tiles.TemperatureAt(120, 0);
-        var lowH = tiles.TerrainHeightAt(120, 0);
-        var hiT = lowT;
-        var hiH = lowH;
-        for (var x = -20; x <= 20; x++)
-        for (var z = -20; z <= 20; z++)
+        var sawPeak = false;
+        for (var x = -128; x < 128; x++)
+        for (var z = -128; z < 128; z++)
         {
             var h = tiles.TerrainHeightAt(x, z);
-            if (h > hiH) { hiH = h; hiT = tiles.TemperatureAt(x, z); }
+            if (h - WorldGen.WaterLevelY < WorldGen.SnowPeakHeightTiles) continue;
+            sawPeak = true;
+            Assert.Equal(BiomeBuiltins.SnowId, tiles.BiomeAt(x, z));
         }
-
-        if (hiH - lowH < 20) return; // seed produced no tall peak — skip
-        Assert.True(hiT < lowT,
-            $"peak h={hiH} T={hiT:0.0} not cooler than low h={lowH} T={lowT:0.0}");
+        if (!sawPeak) return; // seed produced no tall peak — skip
     }
 }
