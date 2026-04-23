@@ -337,8 +337,6 @@ public sealed partial class GridRenderer : Node3D
         foreach (var _ in _simHost.Tiles.InMemoryCells) cellsMem++;
         Profiler.SetCounter("Cells mem", cellsMem);
         Profiler.SetCounter("Cell states", _simHost.Tiles.CellStates.Count);
-        Profiler.SetCounter("Page save IF", _simHost.Paging.SaveInFlightCount);
-        Profiler.SetCounter("Page load IF", _simHost.Paging.LoadInFlightCount);
     }
 
     private long CountInFlight()
