@@ -106,7 +106,10 @@ public sealed partial class WorldMapHud : CanvasLayer
         {
             var cell = _sim.Overworld.Get(cx, cz);
             var biome = BiomeRegistry.Get(cell.BiomeId);
-            var label = cell.IsOcean ? "Ocean" : biome.Name;
+            var label = cell.IsOcean ? "Ocean"
+                : cell.IsLake ? "Lake"
+                : cell.HasRiver ? $"{biome.Name} (river)"
+                : biome.Name;
             _hoverLabel.Text = $"({cx},{cz}) {label}  {cell.TemperatureC:0.0}°C  {cell.RainfallMm:0}mm";
         }
 
@@ -119,6 +122,8 @@ public sealed partial class WorldMapHud : CanvasLayer
     // darker the pixel reads on the overworld.
     private static readonly Color OceanShallow = new(0.25f, 0.55f, 0.78f);
     private static readonly Color OceanDeep    = new(0.05f, 0.12f, 0.28f);
+    private static readonly Color LakeColor    = new(0.30f, 0.60f, 0.85f);
+    private static readonly Color RiverColor   = new(0.40f, 0.70f, 0.95f);
 
     private void RebuildTexture()
     {
@@ -135,6 +140,14 @@ public sealed partial class WorldMapHud : CanvasLayer
                 // shallow→deep so the ramp saturates before runaway lows.
                 var t = Mathf.Clamp(-cell.Elevation, 0f, 1f);
                 px = OceanShallow.Lerp(OceanDeep, t);
+            }
+            else if (cell.IsLake)
+            {
+                px = LakeColor;
+            }
+            else if (cell.HasRiver)
+            {
+                px = RiverColor;
             }
             else
             {

@@ -26,7 +26,9 @@ public readonly record struct WorldMapCell(
     float TemperatureC,
     float RainfallMm,
     float Elevation,
-    bool IsOcean);
+    bool IsOcean,
+    bool HasRiver,
+    bool IsLake);
 
 /// <summary>
 /// 400×400 abstract world map. Each cell carries a biome + climate stamped
@@ -45,6 +47,8 @@ public sealed class WorldMap
     private readonly float[,] _rain = new float[Width, Height];
     private readonly float[,] _elev = new float[Width, Height];
     private readonly bool[,]  _ocean = new bool[Width, Height];
+    private readonly bool[,]  _river = new bool[Width, Height];
+    private readonly bool[,]  _lake  = new bool[Width, Height];
 
     public int Seed { get; }
 
@@ -53,7 +57,7 @@ public sealed class WorldMap
     public WorldMapCell Get(int x, int z)
     {
         if (!InBounds(x, z)) throw new ArgumentOutOfRangeException(nameof(x), $"({x},{z}) outside {Width}×{Height}");
-        return new WorldMapCell(_biome[x, z], _temp[x, z], _rain[x, z], _elev[x, z], _ocean[x, z]);
+        return new WorldMapCell(_biome[x, z], _temp[x, z], _rain[x, z], _elev[x, z], _ocean[x, z], _river[x, z], _lake[x, z]);
     }
 
     public WorldMapCell Get(WorldMapCoord c) => Get(c.X, c.Z);
@@ -61,6 +65,9 @@ public sealed class WorldMap
     public byte BiomeAt(int x, int z) => _biome[x, z];
     public bool IsOcean(int x, int z) => _ocean[x, z];
     public bool IsOcean(WorldMapCoord c) => IsOcean(c.X, c.Z);
+    public bool HasRiver(int x, int z) => _river[x, z];
+    public bool IsLake(int x, int z) => _lake[x, z];
+    public float ElevationAt(int x, int z) => _elev[x, z];
 
     internal void SetCell(int x, int z, byte biomeId, float tempC, float rainMm, float elevation, bool isOcean)
     {
@@ -70,6 +77,9 @@ public sealed class WorldMap
         _elev[x, z] = elevation;
         _ocean[x, z] = isOcean;
     }
+
+    internal void SetRiver(int x, int z, bool v) { _river[x, z] = v; }
+    internal void SetLake(int x, int z, bool v) { _lake[x, z] = v; }
 
     public static bool InBounds(int x, int z) =>
         (uint)x < Width && (uint)z < Height;
@@ -108,6 +118,21 @@ public static class WorldMapGenerator
     public const float CenterBias = 0.60f;
     public const float OceanThreshold = 0.05f;
 
+    // Lake seeding. Non-ocean cells whose Lake-noise mask clears LakeNoise
+    // AND whose elevation sits below LakeElevCeil read as standing water.
+    // Ceil keeps lakes off mountain shoulders; noise threshold tunes density.
+    public const float LakeNoiseThreshold = 0.72f;
+    public const float LakeElevCeil       = 0.35f;
+
+    // River seeding. Cells whose RiverSource-noise mask clears threshold AND
+    // whose elevation exceeds mountain floor spawn a downhill walker. Walker
+    // follows steepest 8-neighbor descent, stamping HasRiver, until it hits
+    // ocean/lake/existing river/local minimum. Local-min termination stamps
+    // a lake on the sink so interior drainage reads as a pond.
+    public const float RiverSourceNoiseThreshold = 0.75f;
+    public const float RiverSourceElevFloor      = 0.55f;
+    private const int  MaxRiverLength             = 400;
+
     public static WorldMap Generate(int seed)
     {
         var map = new WorldMap(seed);
@@ -137,7 +162,73 @@ public static class WorldMapGenerator
             var biome = BiomeClassifier.Pick(tempC, rainMm);
             map.SetCell(x, z, biome, tempC, rainMm, elevation, isOcean);
         }
+
+        StampLakes(map, noise);
+        StampRivers(map, noise);
         return map;
+    }
+
+    private static void StampLakes(WorldMap map, NoiseStack noise)
+    {
+        for (var z = 0; z < WorldMap.Height; z++)
+        for (var x = 0; x < WorldMap.Width; x++)
+        {
+            if (map.IsOcean(x, z)) continue;
+            if (map.ElevationAt(x, z) > LakeElevCeil) continue;
+            var nx = x * NoiseSpread;
+            var nz = z * NoiseSpread;
+            var mask = (noise.Lake.GetNoise(nx, nz) + 1f) * 0.5f;
+            if (mask > LakeNoiseThreshold) map.SetLake(x, z, true);
+        }
+    }
+
+    private static void StampRivers(WorldMap map, NoiseStack noise)
+    {
+        for (var z = 0; z < WorldMap.Height; z++)
+        for (var x = 0; x < WorldMap.Width; x++)
+        {
+            if (map.IsOcean(x, z)) continue;
+            if (map.ElevationAt(x, z) < RiverSourceElevFloor) continue;
+            var nx = x * NoiseSpread;
+            var nz = z * NoiseSpread;
+            var src = (noise.RiverSource.GetNoise(nx, nz) + 1f) * 0.5f;
+            if (src <= RiverSourceNoiseThreshold) continue;
+            WalkRiver(map, x, z);
+        }
+    }
+
+    private static void WalkRiver(WorldMap map, int startX, int startZ)
+    {
+        var cx = startX;
+        var cz = startZ;
+        for (var step = 0; step < MaxRiverLength; step++)
+        {
+            if (map.HasRiver(cx, cz)) return;
+            map.SetRiver(cx, cz, true);
+            if (map.IsOcean(cx, cz) || map.IsLake(cx, cz)) return;
+
+            var here = map.ElevationAt(cx, cz);
+            var bestX = cx;
+            var bestZ = cz;
+            var bestH = here;
+            for (var dz = -1; dz <= 1; dz++)
+            for (var dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dz == 0) continue;
+                var nx = cx + dx;
+                var nz = cz + dz;
+                if (!WorldMap.InBounds(nx, nz)) continue;
+                var h = map.ElevationAt(nx, nz);
+                if (h < bestH) { bestH = h; bestX = nx; bestZ = nz; }
+            }
+            if (bestX == cx && bestZ == cz)
+            {
+                map.SetLake(cx, cz, true);
+                return;
+            }
+            cx = bestX;
+            cz = bestZ;
+        }
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
