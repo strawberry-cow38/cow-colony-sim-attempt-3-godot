@@ -107,7 +107,7 @@ public static class WorldGen
     // grassland 15°C / 800mm. Matches <see cref="BiomeBuiltins.GrasslandId"/>
     // under the default classifier bands.
     public static readonly WorldMapCell DefaultMapCell =
-        new(BiomeBuiltins.GrasslandId, 15f, 800f);
+        new(BiomeBuiltins.GrasslandId, 15f, 800f, 0.5f, false);
 
     // Width (in tiles) of the biome-fizzle band on each side of a 3×3
     // subregion boundary. Within this band the BiomeBorder noise decides
