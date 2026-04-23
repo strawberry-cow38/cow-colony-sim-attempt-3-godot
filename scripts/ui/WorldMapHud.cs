@@ -6,27 +6,28 @@ using CowColonySim.Sim.Grid;
 namespace CowColonySim.UI;
 
 /// <summary>
-/// World-map HUD in two roles: (1) boot-time fullscreen selector — on launch
+/// Fullscreen world-map HUD in two roles: (1) boot-time selector — on launch
 /// the sim sits in <see cref="SimHost.AwaitingWorldSelection"/> with no tiles
 /// generated, and this panel blocks input until the player pins a land cell
-/// and hits Settle; (2) in-game overlay toggled via the M key so the player
-/// can re-settle or regen a new world from inside the sim.
+/// and hits Settle; (2) in-game overlay toggled via M so the player can
+/// re-settle or regen a new world from inside the sim.
 ///
-/// Click to pin a cell; Settle commits the pinned cell (disabled on ocean
-/// per the "no pocket on ocean" rule). Regenerate World rolls a new seed
-/// and returns to selection.
+/// Left-click a cell to pin (Settle button grays on ocean per the no-pocket-
+/// on-ocean rule). Mouse wheel zooms toward cursor. Middle- or right-click
+/// drag pans. Regenerate World rolls a new seed and returns to selection.
 /// </summary>
 public sealed partial class WorldMapHud : CanvasLayer
 {
-    // 2 px per cell keeps the 400×400 map within 800×800 screen pixels.
-    private const int PixelsPerCell = 2;
-    private const int MapWidthPx = WorldMap.Width * PixelsPerCell;
-    private const int MapHeightPx = WorldMap.Height * PixelsPerCell;
-    private const int Margin = 16;
-    private const int ButtonStripH = 40;
+    private const float MinZoom = 1.0f;   // 1 px per cell (400×400 px)
+    private const float MaxZoom = 16.0f;  // 16 px per cell (chunky look at max)
+    private const float WheelZoomStep = 1.25f;
+    private const int   TopBarH = 40;
+    private const int   BottomBarH = 56;
 
     private SimHost _sim = null!;
     private Panel _panel = null!;
+    private Control _viewport = null!;
+    private Control _mapRoot = null!;
     private TextureRect _mapImage = null!;
     private ColorRect _currentMarker = null!;
     private ColorRect _pinMarker = null!;
@@ -35,8 +36,13 @@ public sealed partial class WorldMapHud : CanvasLayer
     private Button _settleButton = null!;
     private Button _regenButton = null!;
     private Label _titleLabel = null!;
+    private Button _closeButton = null!;
     private ImageTexture? _texture;
-    private bool _shown;
+
+    private float _zoom = 2.0f;
+    private Vector2 _pan = Vector2.Zero;       // top-left of map in viewport space
+    private bool _dragging;
+    private Vector2 _dragLastMouse;
     private WorldMapCoord? _pin;
     private readonly Random _regenRng = new();
 
@@ -47,88 +53,106 @@ public sealed partial class WorldMapHud : CanvasLayer
         _sim.WorldRegenerated += OnWorldRegenerated;
         _sim.WorldSelectionChanged += OnSelectionChanged;
 
-        var totalH = MapHeightPx + Margin * 3 + 24 + ButtonStripH + 24;
         _panel = new Panel
         {
-            AnchorLeft = 0.5f, AnchorTop = 0.5f, AnchorRight = 0.5f, AnchorBottom = 0.5f,
-            OffsetLeft = -(MapWidthPx / 2 + Margin),
-            OffsetTop = -totalH / 2,
-            OffsetRight = MapWidthPx / 2 + Margin,
-            OffsetBottom = totalH / 2,
+            AnchorLeft = 0f, AnchorTop = 0f, AnchorRight = 1f, AnchorBottom = 1f,
+            OffsetLeft = 0, OffsetTop = 0, OffsetRight = 0, OffsetBottom = 0,
             Visible = false,
+            MouseFilter = Control.MouseFilterEnum.Stop,
         };
         AddChild(_panel);
 
         _titleLabel = new Label
         {
-            OffsetLeft = Margin, OffsetTop = 4,
-            OffsetRight = Margin + MapWidthPx, OffsetBottom = 24,
-            LabelSettings = new LabelSettings { FontSize = 14, FontColor = new Color(1, 1, 1) },
+            AnchorLeft = 0f, AnchorRight = 1f,
+            OffsetLeft = 0, OffsetTop = 8,
+            OffsetRight = 0, OffsetBottom = 32,
+            LabelSettings = new LabelSettings { FontSize = 18, FontColor = new Color(1, 1, 1) },
             Text = "Choose a location to settle.",
             HorizontalAlignment = HorizontalAlignment.Center,
         };
         _panel.AddChild(_titleLabel);
 
+        _closeButton = new Button
+        {
+            Text = "Close (M)",
+            AnchorLeft = 1f, AnchorRight = 1f,
+            OffsetLeft = -110, OffsetTop = 8,
+            OffsetRight = -10, OffsetBottom = 36,
+            Visible = false,
+        };
+        _closeButton.AddThemeFontSizeOverride("font_size", 13);
+        _closeButton.Pressed += HideOverlay;
+        _panel.AddChild(_closeButton);
+
+        _viewport = new Control
+        {
+            AnchorLeft = 0f, AnchorTop = 0f, AnchorRight = 1f, AnchorBottom = 1f,
+            OffsetLeft = 0, OffsetTop = TopBarH,
+            OffsetRight = 0, OffsetBottom = -BottomBarH,
+            ClipContents = true,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+        };
+        _viewport.GuiInput += OnViewportInput;
+        _viewport.Resized += CenterMap;
+        _panel.AddChild(_viewport);
+
+        _mapRoot = new Control
+        {
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+        };
+        _viewport.AddChild(_mapRoot);
+
         _mapImage = new TextureRect
         {
-            OffsetLeft = Margin, OffsetTop = 28,
-            OffsetRight = Margin + MapWidthPx, OffsetBottom = 28 + MapHeightPx,
             StretchMode = TextureRect.StretchModeEnum.Scale,
             TextureFilter = CanvasItem.TextureFilterEnum.Nearest,
-            MouseFilter = Control.MouseFilterEnum.Pass,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
         };
-        _mapImage.GuiInput += OnMapGuiInput;
-        _panel.AddChild(_mapImage);
+        _mapRoot.AddChild(_mapImage);
 
-        // Floor at 4px so a single-cell marker stays visible when
-        // PixelsPerCell drops below that on large maps.
-        var markerSize = Mathf.Max(PixelsPerCell, 4);
         _currentMarker = new ColorRect
         {
             Color = new Color(1f, 0.92f, 0.10f, 1f),
-            Size = new Vector2(markerSize, markerSize),
             MouseFilter = Control.MouseFilterEnum.Ignore,
             Visible = false,
         };
-        _mapImage.AddChild(_currentMarker);
+        _mapRoot.AddChild(_currentMarker);
 
         _pinMarker = new ColorRect
         {
             Color = new Color(1f, 0.30f, 0.30f, 1f),
-            Size = new Vector2(markerSize, markerSize),
             MouseFilter = Control.MouseFilterEnum.Ignore,
             Visible = false,
         };
-        _mapImage.AddChild(_pinMarker);
+        _mapRoot.AddChild(_pinMarker);
 
         _hoverLabel = new Label
         {
-            OffsetLeft = Margin,
-            OffsetTop = 28 + MapHeightPx + 4,
-            OffsetRight = Margin + MapWidthPx,
-            OffsetBottom = 28 + MapHeightPx + 24,
-            LabelSettings = new LabelSettings { FontSize = 12, FontColor = new Color(1, 1, 1) },
+            AnchorLeft = 0f, AnchorRight = 1f, AnchorBottom = 1f,
+            OffsetLeft = 16, OffsetTop = -BottomBarH + 4,
+            OffsetRight = -16, OffsetBottom = -BottomBarH + 24,
+            LabelSettings = new LabelSettings { FontSize = 13, FontColor = new Color(1, 1, 1) },
             Text = "hover a cell",
         };
         _panel.AddChild(_hoverLabel);
 
         _pinLabel = new Label
         {
-            OffsetLeft = Margin,
-            OffsetTop = 28 + MapHeightPx + 24,
-            OffsetRight = Margin + MapWidthPx,
-            OffsetBottom = 28 + MapHeightPx + 44,
+            AnchorLeft = 0f, AnchorRight = 1f, AnchorBottom = 1f,
+            OffsetLeft = 16, OffsetTop = -BottomBarH + 26,
+            OffsetRight = -16, OffsetBottom = -BottomBarH + 46,
             LabelSettings = new LabelSettings { FontSize = 12, FontColor = new Color(0.85f, 0.85f, 0.85f) },
-            Text = "click a land cell to pin",
+            Text = "left-click to pin · wheel to zoom · right/middle-drag to pan",
         };
         _panel.AddChild(_pinLabel);
 
-        var buttonY = 28 + MapHeightPx + 48;
         _regenButton = new Button
         {
+            AnchorLeft = 0f, AnchorBottom = 1f,
+            OffsetLeft = 16, OffsetTop = -32,
+            OffsetRight = 186, OffsetBottom = -8,
             Text = "Regenerate World",
-            OffsetLeft = Margin, OffsetTop = buttonY,
-            OffsetRight = Margin + 170, OffsetBottom = buttonY + 28,
         };
         _regenButton.AddThemeFontSizeOverride("font_size", 13);
         _regenButton.Pressed += OnRegenPressed;
@@ -136,9 +160,10 @@ public sealed partial class WorldMapHud : CanvasLayer
 
         _settleButton = new Button
         {
+            AnchorLeft = 1f, AnchorRight = 1f, AnchorBottom = 1f,
+            OffsetLeft = -166, OffsetTop = -32,
+            OffsetRight = -16, OffsetBottom = -8,
             Text = "Settle Here",
-            OffsetLeft = Margin + MapWidthPx - 150, OffsetTop = buttonY,
-            OffsetRight = Margin + MapWidthPx, OffsetBottom = buttonY + 28,
             Disabled = true,
         };
         _settleButton.AddThemeFontSizeOverride("font_size", 13);
@@ -160,14 +185,11 @@ public sealed partial class WorldMapHud : CanvasLayer
 
     public override void _UnhandledInput(InputEvent ev)
     {
-        // M-key toggle only valid after settlement; during selection the
-        // panel is modal and the key is a no-op so the player can't dismiss
-        // the selector and be stranded with no pocket.
         if (_sim.AwaitingWorldSelection) return;
         if (ev is InputEventKey k && k.Pressed && !k.Echo && k.Keycode == Key.M)
         {
-            _shown = !_shown;
-            _panel.Visible = _shown;
+            if (_panel.Visible) HideOverlay();
+            else ShowOverlay();
             GetViewport().SetInputAsHandled();
         }
     }
@@ -176,25 +198,54 @@ public sealed partial class WorldMapHud : CanvasLayer
     {
         if (!_panel.Visible) return;
 
-        var mx = _mapImage.GetLocalMousePosition();
-        var cx = (int)(mx.X / PixelsPerCell);
-        var cz = (int)(mx.Y / PixelsPerCell);
-        if (WorldMap.InBounds(cx, cz))
+        ApplyMapTransform();
+
+        var local = _viewport.GetLocalMousePosition();
+        if (TryViewportToCell(local, out var cx, out var cz))
         {
             var cell = _sim.Overworld.Get(cx, cz);
             _hoverLabel.Text = $"({cx},{cz}) {DescribeCell(cell)}  {cell.TemperatureC:0.0}°C  {cell.RainfallMm:0}mm";
         }
+        else
+        {
+            _hoverLabel.Text = "hover a cell";
+        }
+    }
 
+    private void ApplyMapTransform()
+    {
+        var w = WorldMap.Width * _zoom;
+        var h = WorldMap.Height * _zoom;
+        _mapRoot.Position = _pan;
+        _mapImage.Position = Vector2.Zero;
+        _mapImage.Size = new Vector2(w, h);
+
+        var markerPx = Mathf.Max(_zoom, 4f);
+        _pinMarker.Size = new Vector2(markerPx, markerPx);
+        _currentMarker.Size = new Vector2(markerPx, markerPx);
+
+        if (_pin is { } p)
+        {
+            _pinMarker.Position = new Vector2(p.X * _zoom, p.Z * _zoom);
+        }
         if (!_sim.AwaitingWorldSelection)
         {
             var here = _sim.CurrentMapCoord;
             _currentMarker.Visible = true;
-            _currentMarker.Position = new Vector2(here.X * PixelsPerCell, here.Z * PixelsPerCell);
+            _currentMarker.Position = new Vector2(here.X * _zoom, here.Z * _zoom);
         }
         else
         {
             _currentMarker.Visible = false;
         }
+    }
+
+    private bool TryViewportToCell(Vector2 viewportLocal, out int cx, out int cz)
+    {
+        var local = viewportLocal - _pan;
+        cx = (int)Math.Floor(local.X / _zoom);
+        cz = (int)Math.Floor(local.Y / _zoom);
+        return WorldMap.InBounds(cx, cz);
     }
 
     private static string DescribeCell(WorldMapCell cell)
@@ -205,15 +256,61 @@ public sealed partial class WorldMapHud : CanvasLayer
         return cell.HasRiver ? $"{b.Name} (river)" : b.Name;
     }
 
-    private void OnMapGuiInput(InputEvent ev)
+    private void OnViewportInput(InputEvent ev)
     {
-        if (ev is not InputEventMouseButton mb) return;
-        if (!mb.Pressed || mb.ButtonIndex != MouseButton.Left) return;
-        var cx = (int)(mb.Position.X / PixelsPerCell);
-        var cz = (int)(mb.Position.Y / PixelsPerCell);
-        if (!WorldMap.InBounds(cx, cz)) return;
-        _pin = new WorldMapCoord(cx, cz);
-        UpdatePin();
+        switch (ev)
+        {
+            case InputEventMouseButton mb when mb.Pressed && mb.ButtonIndex == MouseButton.WheelUp:
+                ZoomAt(mb.Position, _zoom * WheelZoomStep);
+                _viewport.AcceptEvent();
+                break;
+            case InputEventMouseButton mb when mb.Pressed && mb.ButtonIndex == MouseButton.WheelDown:
+                ZoomAt(mb.Position, _zoom / WheelZoomStep);
+                _viewport.AcceptEvent();
+                break;
+            case InputEventMouseButton mb when mb.ButtonIndex == MouseButton.Middle
+                                             || mb.ButtonIndex == MouseButton.Right:
+                _dragging = mb.Pressed;
+                _dragLastMouse = mb.Position;
+                _viewport.AcceptEvent();
+                break;
+            case InputEventMouseButton mb when mb.Pressed && mb.ButtonIndex == MouseButton.Left:
+                if (TryViewportToCell(mb.Position, out var cx, out var cz))
+                {
+                    _pin = new WorldMapCoord(cx, cz);
+                    UpdatePin();
+                }
+                _viewport.AcceptEvent();
+                break;
+            case InputEventMouseMotion mm when _dragging:
+                _pan += mm.Position - _dragLastMouse;
+                _dragLastMouse = mm.Position;
+                _viewport.AcceptEvent();
+                break;
+        }
+    }
+
+    private void ZoomAt(Vector2 viewportPos, float targetZoom)
+    {
+        targetZoom = Mathf.Clamp(targetZoom, MinZoom, MaxZoom);
+        if (Mathf.IsEqualApprox(targetZoom, _zoom)) return;
+        // Keep the map point under the cursor stationary. Cursor in map
+        // space = (viewportPos - pan) / zoom → invariant under zoom change.
+        var mapPt = (viewportPos - _pan) / _zoom;
+        _zoom = targetZoom;
+        _pan = viewportPos - mapPt * _zoom;
+    }
+
+    private void CenterMap()
+    {
+        var vs = _viewport.Size;
+        if (vs.X <= 0 || vs.Y <= 0) return;
+        // Default zoom = fit-to-viewport with a little breathing room.
+        var fit = Math.Min(vs.X / WorldMap.Width, vs.Y / WorldMap.Height) * 0.95f;
+        _zoom = Mathf.Clamp(fit, MinZoom, MaxZoom);
+        _pan = new Vector2(
+            (vs.X - WorldMap.Width * _zoom) * 0.5f,
+            (vs.Y - WorldMap.Height * _zoom) * 0.5f);
     }
 
     private void UpdatePin()
@@ -221,12 +318,11 @@ public sealed partial class WorldMapHud : CanvasLayer
         if (_pin is not { } p)
         {
             _pinMarker.Visible = false;
-            _pinLabel.Text = "click a land cell to pin";
+            _pinLabel.Text = "left-click to pin · wheel to zoom · right/middle-drag to pan";
             _settleButton.Disabled = true;
             return;
         }
         _pinMarker.Visible = true;
-        _pinMarker.Position = new Vector2(p.X * PixelsPerCell, p.Z * PixelsPerCell);
         var cell = _sim.Overworld.Get(p);
         var desc = DescribeCell(cell);
         if (cell.IsOcean)
@@ -259,20 +355,33 @@ public sealed partial class WorldMapHud : CanvasLayer
         RebuildTexture();
     }
 
+    private void ShowOverlay()
+    {
+        _panel.Visible = true;
+        CenterMap();
+    }
+
+    private void HideOverlay()
+    {
+        if (_sim.AwaitingWorldSelection) return;
+        _panel.Visible = false;
+    }
+
     private void OnSelectionChanged()
     {
         if (_sim.AwaitingWorldSelection)
         {
-            _shown = true;
-            _panel.Visible = true;
+            ShowOverlay();
             _titleLabel.Text = "Choose a location to settle.";
-            _settleButton.Visible = true;
+            _settleButton.Text = "Settle Here";
+            _closeButton.Visible = false;
         }
         else
         {
-            _shown = false;
             _panel.Visible = false;
             _titleLabel.Text = "World Map";
+            _settleButton.Text = "Settle Here";
+            _closeButton.Visible = true;
         }
         UpdatePin();
     }
