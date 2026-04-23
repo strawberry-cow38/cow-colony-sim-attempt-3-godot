@@ -71,6 +71,18 @@ public static class WorldGen
     // visible channel without drowning the surrounding land.
     private const float RiverValleyH           = 3f;
 
+    // Lake-proximity mask (mirrors the river one). Same Chebyshev distance
+    // field logic, built from a pre-pass that predicts which cells the
+    // lake carve will touch. Within LakeMountainInner tiles of any lake
+    // cell, mountains fully suppress; between Inner and Outer, they fade
+    // in. Stops ridge cliffs from ever dropping straight into water.
+    private const int   LakeMountainInner      = 6;
+    private const int   LakeMountainOuter      = 24;
+    // Shore-fade target — gentle beach slope just above sea level. Well
+    // below RiverValleyH because lake shores read best when the land
+    // barely clears the water rather than sitting on a pronounced bank.
+    private const float LakeShoreH             = 2f;
+
     // Bank-lowering pass. Iterative single-step dilation limited to the
     // shoreline band — cells at or below (WaterLevelY + BankDilationCap)
     // get pulled toward their lowest neighbor with a slope 1, smoothing
@@ -96,6 +108,13 @@ public static class WorldGen
     // under the default classifier bands.
     public static readonly WorldMapCell DefaultMapCell =
         new(BiomeBuiltins.GrasslandId, 15f, 800f);
+
+    // Width (in tiles) of the biome-fizzle band on each side of a 3×3
+    // subregion boundary. Within this band the BiomeBorder noise decides
+    // per-tile whether to take the adjacent cell's biome/climate instead
+    // of the owning cell's — so borders read as ragged interdigitation
+    // rather than straight stripes.
+    public const int BiomeBorderBandTiles = 10;
 
     // Snow cap override. Any tile rising more than this many tiles above
     // sea level re-tags as Snow — gives mountains white peaks inside e.g.
@@ -137,6 +156,28 @@ public static class WorldGen
         var riverPaths = PlanRivers(noise, seed, sizeX, sizeZ, halfX, halfZ);
         var riverDist = BuildRiverDistField(riverPaths, sizeX, sizeZ, halfX, halfZ);
 
+        // Predict lake cells from noise alone (no height pass needed) so
+        // the heightmap loop can query the lake distance field the same
+        // way it queries riverDist. A cell is a "lake seed" when all three
+        // conditions the in-loop carve checks are met: low continent base,
+        // weak mountain mask, and a lake mask above onset.
+        var lakeSeeds = new bool[sizeX, sizeZ];
+        Parallel.For(0, sizeX, xi =>
+        {
+            for (var zi = 0; zi < sizeZ; zi++)
+            {
+                var x = xi - halfX;
+                var z = zi - halfZ;
+                var baseHRaw = 6f + noise.Continent.GetNoise(x, z) * 4f;
+                if (baseHRaw >= LakeMaxBaseH) continue;
+                var maskRaw = (noise.MountainMask.GetNoise(x, z) + 1f) * 0.5f;
+                if (maskRaw >= LakeMountainBuffer) continue;
+                var lakeMask = (noise.Lake.GetNoise(x, z) + 1f) * 0.5f;
+                if (lakeMask > LakeOnset) lakeSeeds[xi, zi] = true;
+            }
+        });
+        var lakeDist = BuildMaskDistField(lakeSeeds, sizeX, sizeZ);
+
         var heights = new int[sizeX, sizeZ];
         Parallel.For(0, sizeX, xi =>
         {
@@ -162,21 +203,30 @@ public static class WorldGen
                 // through plains instead of through ridgelines.
                 var rd = riverDist[xi, zi];
                 var riverInfluence = 1f - Smoothstep(RiverMountainInner, RiverMountainOuter, rd);
+                var ld = lakeDist[xi, zi];
+                var lakeInfluence = 1f - Smoothstep(LakeMountainInner, LakeMountainOuter, ld);
 
                 var maskRaw = (noise.MountainMask.GetNoise(x, z) + 1f) * 0.5f;
                 var mountainWeight = Smoothstep(MountainOnset, MountainFull, maskRaw);
-                mountainWeight *= (1f - riverInfluence);
+                mountainWeight *= (1f - riverInfluence) * (1f - lakeInfluence);
                 if (mountainWeight > 0f)
                 {
                     var ridge = (noise.Ridge.GetNoise(x, z) + 1f) * 0.5f;
                     var mountainH = 12f + ridge * 90f;                // 12..102
                     baseH = Lerp(baseH, mountainH, mountainWeight);
                 }
-                // Pull plains toward the valley floor near rivers — kills
-                // big rolling hills that would otherwise sit over the river.
+                // Pull plains toward valleys near rivers AND lake shores
+                // — kills big rolling hills that would otherwise drop
+                // straight into the water. The lake carve below still
+                // pushes the lake interior below sea level; the shore pull
+                // just flattens the surrounding ring into a beach.
                 if (riverInfluence > 0f)
                 {
                     baseH = Lerp(baseH, RiverValleyH, riverInfluence);
+                }
+                if (lakeInfluence > 0f)
+                {
+                    baseH = Lerp(baseH, LakeShoreH, lakeInfluence);
                 }
 
                 // Mountains stay smooth — no plateau quantization. Cliffs
@@ -297,6 +347,39 @@ public static class WorldGen
             // visible caps even across neighbor cells.
             var cellDx = use33 ? Math.Clamp(xi / pocketSize - 1, -1, 1) : 0;
             var cellDz = use33 ? Math.Clamp(zi / pocketSize - 1, -1, 1) : 0;
+            // Biome fizzle. Along each subregion boundary, blend a band of
+            // BiomeBorderBandTiles in which high-freq BiomeBorder noise
+            // stochastically swaps the tile's biome/climate to the neighbor
+            // across that boundary. Flip probability starts at ~50% at the
+            // seam and decays to 0 at the band edge — produces a ragged
+            // interdigitation instead of a hard stripe.
+            if (use33)
+            {
+                var modX = xi % pocketSize;
+                var distX = Math.Min(modX, pocketSize - modX);
+                if (distX < BiomeBorderBandTiles)
+                {
+                    var p = distX / (float)BiomeBorderBandTiles;
+                    var fizz = (noise.BiomeBorder.GetNoise(x * 4f, z * 4f) + 1f) * 0.5f;
+                    if (fizz > 0.5f + p * 0.5f)
+                    {
+                        var dir = modX < pocketSize / 2 ? -1 : 1;
+                        cellDx = Math.Clamp(cellDx + dir, -1, 1);
+                    }
+                }
+                var modZ = zi % pocketSize;
+                var distZ = Math.Min(modZ, pocketSize - modZ);
+                if (distZ < BiomeBorderBandTiles)
+                {
+                    var p = distZ / (float)BiomeBorderBandTiles;
+                    var fizz = (noise.BiomeBorder.GetNoise(x * 4f + 917f, z * 4f + 103f) + 1f) * 0.5f;
+                    if (fizz > 0.5f + p * 0.5f)
+                    {
+                        var dir = modZ < pocketSize / 2 ? -1 : 1;
+                        cellDz = Math.Clamp(cellDz + dir, -1, 1);
+                    }
+                }
+            }
             var ownCell = neighborhood[cellDx + 1, cellDz + 1];
             var cellTempC = ownCell.TemperatureC;
             var cellBiomeId = ownCell.BiomeId;
@@ -589,6 +672,26 @@ public static class WorldGen
             }
         }
 
+        SweepChebyshev(dist, sizeX, sizeZ);
+        return dist;
+    }
+
+    // Chebyshev distance transform seeded from an arbitrary boolean mask
+    // (true = seed cell with distance 0). Same two-pass sweep as the
+    // river variant; used for the lake-proximity field.
+    private static int[,] BuildMaskDistField(bool[,] mask, int sizeX, int sizeZ)
+    {
+        const int INF = 1 << 20;
+        var dist = new int[sizeX, sizeZ];
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+            dist[xi, zi] = mask[xi, zi] ? 0 : INF;
+        SweepChebyshev(dist, sizeX, sizeZ);
+        return dist;
+    }
+
+    private static void SweepChebyshev(int[,] dist, int sizeX, int sizeZ)
+    {
         for (var xi = 0; xi < sizeX; xi++)
         for (var zi = 0; zi < sizeZ; zi++)
         {
@@ -609,7 +712,6 @@ public static class WorldGen
             if (xi > 0         && zi < sizeZ - 1  && dist[xi - 1, zi + 1] + 1 < v) v = dist[xi - 1, zi + 1] + 1;
             dist[xi, zi] = v;
         }
-        return dist;
     }
 
     // Stamp each cell of every pre-planned river path as a disc of bed

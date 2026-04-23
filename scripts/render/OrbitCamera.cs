@@ -1,4 +1,6 @@
 using Godot;
+using CowColonySim.Sim;
+using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.Render;
 
@@ -54,6 +56,14 @@ public sealed partial class OrbitCamera : Camera3D
         var multiplier = Input.IsKeyPressed(Key.Shift) ? 2.0f : 1.0f;
         var step = PanSpeed * multiplier * (float)delta;
         Target += new Vector3(worldX * step, 0, worldZ * step);
+        // Clamp the camera gimbal to the playable pocket's horizontal
+        // footprint — stops the player from panning out into the LOD
+        // backdrop neighbor cells.
+        var half = Cell.SizeTiles * SimConstants.TileWidthMeters * 0.5f;
+        Target = new Vector3(
+            Mathf.Clamp(Target.X, -half, half),
+            Target.Y,
+            Mathf.Clamp(Target.Z, -half, half));
         UpdateTransform();
     }
 
