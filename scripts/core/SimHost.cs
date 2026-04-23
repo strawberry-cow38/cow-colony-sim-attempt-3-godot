@@ -14,12 +14,14 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
-	// Phase 1 of the worldmap pivot: the playable world is a single 256×256
-	// tile cell (~384m square). The larger world lives in a 2D WorldMap
-	// (phase 2) and the cell you're playing is generated on demand from
-	// it. No streaming, no paging, no cells-on-disk — the whole playable
-	// region lives in memory.
-	public const int WorldSize = Cell.SizeTiles;
+	// Playable pocket is one overworld cell (256×256 tiles ≈ 384m). The
+	// world WorldGen actually populates is a 3×3 neighborhood of cells
+	// (768×768 tiles) so GridRenderer's G8 LOD tier can render the 8
+	// surrounding cells as coarse terrain without a separate backdrop.
+	// The pocket stays centered on (0,0); neighbor subregions get stamped
+	// with their own overworld biome/climate.
+	public const int PocketSize = Cell.SizeTiles;
+	public const int WorldSize = PocketSize * 3;
 	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 
@@ -56,7 +58,7 @@ public partial class SimHost : Node
 		BuiltinBiomes.RegisterAll();
 		Overworld = WorldMapGenerator.Generate(WorldSeed);
 		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize,
-			mapCell: Overworld.Get(CurrentMapCoord));
+			overworld: Overworld, center: CurrentMapCoord);
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
@@ -71,7 +73,7 @@ public partial class SimHost : Node
 		Tiles.Clear();
 		Overworld = WorldMapGenerator.Generate(seed);
 		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize,
-			mapCell: Overworld.Get(CurrentMapCoord));
+			overworld: Overworld, center: CurrentMapCoord);
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);

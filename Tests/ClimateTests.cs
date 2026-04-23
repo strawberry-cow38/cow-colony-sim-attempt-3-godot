@@ -39,6 +39,27 @@ public class ClimateTests
     }
 
     [Fact]
+    public void Climate_From33Neighborhood_StampsPerSubregion()
+    {
+        // WorldGen in 3×3 mode paints each 256-wide subregion with the
+        // climate of the overworld cell it represents. Center subregion
+        // (world coord 0) carries center-cell temp; the neighbor to the
+        // east (world coord > +128) carries that neighbor cell's temp.
+        var overworld = WorldMapGenerator.Generate(seed: 2026);
+        var center = WorldMap.Center;
+        var size = Cell.SizeTiles * 3;
+        var tiles = new TileWorld();
+        WorldGen.Generate(tiles, seed: 2026, sizeX: size, sizeZ: size,
+            overworld: overworld, center: center);
+
+        var centerCell = overworld.Get(center);
+        var eastCell   = overworld.Get(center.X + 1, center.Z);
+
+        Assert.Equal(centerCell.TemperatureC, tiles.TemperatureAt(0, 0));
+        Assert.Equal(eastCell.TemperatureC,   tiles.TemperatureAt(200, 0));
+    }
+
+    [Fact]
     public void SnowBiome_AppearsOnTallPeaks()
     {
         // Tiles rising SnowPeakHeightTiles above sea level re-tag as Snow,

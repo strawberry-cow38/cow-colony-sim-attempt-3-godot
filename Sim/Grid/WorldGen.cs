@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using CowColonySim.Sim.Biomes;
@@ -112,10 +113,19 @@ public static class WorldGen
 
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
-        float frequency = DefaultFrequency, WorldMapCell? mapCell = null)
+        float frequency = DefaultFrequency, WorldMapCell? mapCell = null,
+        WorldMap? overworld = null, WorldMapCoord? center = null)
     {
         _ = frequency;
-        var cell = mapCell ?? DefaultMapCell;
+        var fallbackCell = mapCell ?? DefaultMapCell;
+        // Neighborhood stamping: when overworld+center are supplied we treat
+        // the tile grid as a 3×3 arrangement of playable cells (the center
+        // cell is the pocket, the 8 outer subregions are neighbor cells
+        // rendered by GridRenderer's G8 LOD tier). Every tile pulls its
+        // biome/climate from whichever overworld cell owns its subregion.
+        // When not supplied, the whole grid stamps uniformly from mapCell
+        // (tests + any legacy single-cell callers).
+        var use33 = overworld != null && center != null;
         var noise = new NoiseStack(seed);
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
@@ -207,16 +217,35 @@ public static class WorldGen
         LowerBanks(heights, sizeX, sizeZ);
         tiles.SetRiverPaths(riverPaths);
 
-        // Climate + biome come straight from the supplied WorldMapCell —
-        // one biome across the whole playable pocket, stamped uniformly
-        // at every tile. River corridors still boost rainfall locally
-        // (not a biome-level effect). Snow peaks override per-tile below
-        // for tall columns in non-hot biomes.
-        var cellTempC = cell.TemperatureC;
-        var cellRainMm = cell.RainfallMm;
-        var cellBiomeId = cell.BiomeId;
-        var allowSnowPeak = cellBiomeId != BiomeBuiltins.SavannaId
-                         && cellBiomeId != BiomeBuiltins.DesertId;
+        // Precompute the 3×3 neighborhood of WorldMapCells (or a single
+        // cell filled 9× when running in uniform mode). Indexed as
+        // neighborhood[cellDx+1, cellDz+1] with cellDx/cellDz ∈ {-1,0,1}.
+        // Off-map neighbors fall back to DefaultMapCell so the edge of the
+        // world still stamps *something* rather than crashing.
+        var neighborhood = new WorldMapCell[3, 3];
+        for (var cdx = -1; cdx <= 1; cdx++)
+        for (var cdz = -1; cdz <= 1; cdz++)
+        {
+            if (use33)
+            {
+                var c = center!.Value;
+                var nx = c.X + cdx;
+                var nz = c.Z + cdz;
+                neighborhood[cdx + 1, cdz + 1] = WorldMap.InBounds(nx, nz)
+                    ? overworld!.Get(nx, nz)
+                    : DefaultMapCell;
+            }
+            else
+            {
+                neighborhood[cdx + 1, cdz + 1] = fallbackCell;
+            }
+        }
+
+        // Subregion math. In 3×3 mode the tile grid is partitioned into
+        // pocketSize-wide bands — xi/pocketSize yields a 0/1/2 band index
+        // which maps to cellDx ∈ {-1,0,1}. In uniform mode the whole grid
+        // is one band (index 0) → cellDx stays 0.
+        var pocketSize = Cell.SizeTiles;
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
@@ -262,13 +291,21 @@ public static class WorldGen
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            // Per-tile climate = cell climate + local river rainfall boost.
-            // Biome = cell biome, except tall columns in cold/temperate
-            // cells re-tag as Snow so mountains keep visible caps.
+            // Per-tile climate = owning subregion's cell climate + local
+            // river rainfall boost. Biome = cell biome, except tall columns
+            // in cold/temperate cells re-tag as Snow so mountains keep
+            // visible caps even across neighbor cells.
+            var cellDx = use33 ? Math.Clamp(xi / pocketSize - 1, -1, 1) : 0;
+            var cellDz = use33 ? Math.Clamp(zi / pocketSize - 1, -1, 1) : 0;
+            var ownCell = neighborhood[cellDx + 1, cellDz + 1];
+            var cellTempC = ownCell.TemperatureC;
+            var cellBiomeId = ownCell.BiomeId;
+            var allowSnowPeak = cellBiomeId != BiomeBuiltins.SavannaId
+                             && cellBiomeId != BiomeBuiltins.DesertId;
             var rd2 = riverDist[xi, zi];
             var riverBoost = (1f - Smoothstep(RainRiverInner, RainRiverOuter, rd2))
                              * RainRiverBoostMm;
-            var rainMm = cellRainMm + riverBoost;
+            var rainMm = ownCell.RainfallMm + riverBoost;
             var biome = cellBiomeId;
             if (height - WaterLevelY >= SnowPeakHeightTiles && allowSnowPeak)
                 biome = BiomeBuiltins.SnowId;
