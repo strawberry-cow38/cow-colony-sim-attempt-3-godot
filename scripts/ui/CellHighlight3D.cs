@@ -20,11 +20,10 @@ public partial class CellHighlight3D : Node3D
     // WorldGen can generate (~77m) with headroom for the camera pan.
     private const float BoxHeightMeters = 300f;
 
-    // Wall translucency. Low alpha keeps the interior readable; a
-    // slightly warm yellow matches the wireframe accent so the wall +
-    // outline read as one object.
-    private static readonly Color WallColor = new(1.0f, 0.92f, 0.10f, 0.12f);
-    private static readonly Color WireColor = new(1.0f, 0.92f, 0.10f, 1.0f);
+    // Wall translucency. Low alpha keeps the interior readable; neutral
+    // gray reads as a boundary marker without fighting biome palettes.
+    private static readonly Color WallColor = new(0.70f, 0.72f, 0.75f, 0.12f);
+    private static readonly Color WireColor = new(0.80f, 0.82f, 0.85f, 1.0f);
 
     public override void _Ready()
     {
