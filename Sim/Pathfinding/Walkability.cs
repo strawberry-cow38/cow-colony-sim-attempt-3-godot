@@ -10,6 +10,7 @@ public static class Walkability
     public static bool IsStandable(TileWorld world, TilePos pos)
     {
         if (!world.Get(pos).IsEmpty) return false;
+        if (world.IsBlocked(pos)) return false;
         if (!IsSupport(world.Get(pos.Offset(0, -1, 0)))) return false;
         for (var dy = 1; dy < SimConstants.HeadroomTiles; dy++)
         {

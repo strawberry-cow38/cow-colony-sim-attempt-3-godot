@@ -13,6 +13,13 @@ public sealed class TileWorld
     // eviction currently only touches voxel chunks; terrain stays resident.
     private readonly Dictionary<(int cx, int cz), TerrainChunk> _terrainChunks = new();
 
+    // Sparse set of tile positions declared impassable by non-tile-kind
+    // occupants — trees, crops, deployed furniture that doesn't set TileKind.
+    // Walkability consults this in IsStandable so a colonist can't path into
+    // a tile with a tree trunk in it. Kept on TileWorld (not the owning
+    // entity) so the pathfinder doesn't have to touch the ECS.
+    private readonly HashSet<TilePos> _blockers = new();
+
     // Planned river paths, stamped in by WorldGen after generation runs.
     // Empty until Generate finishes. Consulted by RiverDebugRenderer to draw
     // flow-direction arrows and (eventually) by water-wheel / fish systems.
@@ -119,9 +126,23 @@ public sealed class TileWorld
         _cellStates.Clear();
         _chunksByCell.Clear();
         _terrainChunks.Clear();
+        _blockers.Clear();
         RiverPaths = Array.Empty<RiverPath>();
         MutationTick++;
     }
+
+    /// <summary>True if a non-tile-kind occupant (tree, crop, furniture) has
+    /// declared this tile impassable. Stacks on top of the tile-kind walkability
+    /// check in <see cref="Pathfinding.Walkability.IsStandable"/>.</summary>
+    public bool IsBlocked(TilePos pos) => _blockers.Contains(pos);
+
+    public void SetBlocked(TilePos pos, bool blocked)
+    {
+        if (blocked) { if (_blockers.Add(pos)) MutationTick++; }
+        else { if (_blockers.Remove(pos)) MutationTick++; }
+    }
+
+    public IEnumerable<TilePos> EnumerateBlockers() => _blockers;
 
     // ---- Terrain heightmap API -------------------------------------------
 

@@ -5,6 +5,7 @@ using fennecs;
 using CowColonySim.Sim;
 using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Components;
+using CowColonySim.Sim.Crops;
 using CowColonySim.Sim.Grid;
 using CowColonySim.Sim.Jobs;
 using CowColonySim.Sim.Pathfinding;
@@ -69,6 +70,7 @@ public partial class SimHost : Node
 	public override void _Ready()
 	{
 		BuiltinBiomes.RegisterAll();
+		BuiltinCrops.RegisterAll();
 		Overworld = WorldMapGenerator.Generate(WorldSeed);
 		TimeOfDay.SetTicks(CalendarSystem.StartTicksOffset);
 		LogStartup();
@@ -108,6 +110,8 @@ public partial class SimHost : Node
 			new TilePos(half - 1, 0, half - 1));
 		SeedColonyClaim();
 		SeedColonists();
+		var treeCount = TreeScatter.Populate(World, Tiles, PocketSize / 2, _rng);
+		GD.Print($"SimHost seeded {treeCount} trees.");
 		ChunkTierSystem.Step(World, Tiles);
 		AwaitingWorldSelection = false;
 		EmitSignal(SignalName.WorldRegenerated);
@@ -151,6 +155,9 @@ public partial class SimHost : Node
 		Profiler.Begin("PathFollow");
 		PathFollowSystem.Step(World, (float)SimConstants.SimDt);
 		Profiler.End("PathFollow");
+		Profiler.Begin("CropGrowth");
+		CropGrowthSystem.Step(World);
+		Profiler.End("CropGrowth");
 		if (tick % SimConstants.SimHz == 0)
 		{
 			Profiler.Begin("ChunkTier");
@@ -171,6 +178,7 @@ public partial class SimHost : Node
 		World.Stream<ClaimedRegion>().For((in Entity e, ref ClaimedRegion _) => toKill.Add(e));
 		World.Stream<LiveAnchor>().For((in Entity e, ref LiveAnchor _) => toKill.Add(e));
 		World.Stream<Colonist>().For((in Entity e, ref Colonist _) => toKill.Add(e));
+		World.Stream<Crop>().For((in Entity e, ref Crop _) => toKill.Add(e));
 		foreach (var e in toKill) e.Despawn();
 	}
 
