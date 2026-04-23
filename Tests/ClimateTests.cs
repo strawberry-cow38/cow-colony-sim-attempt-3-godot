@@ -20,23 +20,22 @@ public class ClimateTests
     }
 
     [Fact]
-    public void Temperature_DropsWithLatitude()
+    public void Climate_FromMapCell_StampsCellClimateAcrossPocket()
     {
-        // 1024×1024 so the two sample strips land in different cells (cells
-        // are 256 tiles across — on a 128-tile world every sample lands in
-        // the same cell and temperature is uniform).
+        // WorldGen now pulls biome + base climate from the supplied
+        // WorldMapCell. Every tile in the pocket carries that temp; rain
+        // = cell rain + river boost, so it stays ≥ cell rain everywhere.
         var tiles = new TileWorld();
-        WorldGen.Generate(tiles, seed: 7, sizeX: 1024, sizeZ: 1024);
+        var mapCell = new WorldMapCell(
+            BiomeBuiltins.GrasslandId, tempC: 12f, rainMm: 500f);
+        WorldGen.Generate(tiles, seed: 7, sizeX: 64, sizeZ: 64, mapCell: mapCell);
 
-        var equatorSum = 0f;
-        var poleSum = 0f;
-        for (var x = -32; x < 32; x++)
+        for (var x = -32; x < 32; x += 8)
+        for (var z = -32; z < 32; z += 8)
         {
-            equatorSum += tiles.TemperatureAt(x, 0);
-            poleSum += tiles.TemperatureAt(x, 480);
+            Assert.Equal(12f, tiles.TemperatureAt(x, z));
+            Assert.True(tiles.RainfallAt(x, z) >= 500f);
         }
-        Assert.True(equatorSum / 64f > poleSum / 64f + 10f,
-            $"equator avg {equatorSum / 64f:0.0} not clearly warmer than pole avg {poleSum / 64f:0.0}");
     }
 
     [Fact]

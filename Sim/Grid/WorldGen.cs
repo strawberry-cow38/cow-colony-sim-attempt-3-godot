@@ -91,48 +91,39 @@ public static class WorldGen
     private const int   CoastRadiusTiles  = 48;
     private const float CoastFloor        = -5f;
 
-    // Climate. Latitude-driven base temperature plus a slow noise wobble.
-    // Rainfall is low-freq noise biased up near rivers. Both are sampled
-    // **per cell** (one value per 256×256 tile cell) so biomes are blocky,
-    // one-biome-per-cell — no per-tile crossover fuzz. Sampled once at
-    // worldgen from the cell center; a later weather system can animate
-    // deltas on top. Elevation no longer affects the stored temperature —
-    // snowy peaks come from the SnowPeakHeightTiles override below.
+    // Climate + biome come from the WorldMap cell this playable pocket
+    // represents — one <see cref="WorldMapCell"/> stamps the entire
+    // 256×256 region with a single biome + base climate. Per-tile climate
+    // is still stored so weather/river effects can layer on top, but the
+    // base value is constant across the cell. Snow peaks are the one
+    // per-tile override: tall columns re-tag as Snow below.
     //
-    // Latitude runs along the Z axis: |z|/halfZ = 0 at the equator, 1 at the
-    // pole. EquatorC warms the tropics, PoleC cools the arctic rim.
-    public const float TempEquatorC   = 28f;
-    public const float TempPoleC      = -20f;
-    public const float TempNoiseAmpC  = 4f;
+    // Default fallback when no WorldMapCell is supplied (tests): mid
+    // grassland 15°C / 800mm. Matches <see cref="BiomeBuiltins.GrasslandId"/>
+    // under the default classifier bands.
+    public static readonly WorldMapCell DefaultMapCell =
+        new(BiomeBuiltins.GrasslandId, 15f, 800f);
 
-    // Snow cap override. Cells are one-biome-each, but any tile rising more
-    // than this many tiles above sea level re-tags as Snow — gives mountains
-    // white peaks inside e.g. a jungle or grassland cell without splitting
-    // the cell into sub-biomes. Explicitly skipped for Savanna and Desert
-    // cells so hot-band peaks keep their host biome instead of growing
-    // incongruous snow caps.
+    // Snow cap override. Any tile rising more than this many tiles above
+    // sea level re-tags as Snow — gives mountains white peaks inside e.g.
+    // a jungle or grassland cell without splitting the cell into sub-
+    // biomes. Explicitly skipped for Savanna and Desert cells so hot-band
+    // peaks keep their host biome instead of growing incongruous snow caps.
     public const int   SnowPeakHeightTiles = 60;
 
-    // Biome-border transition band. Tiles within this many tiles of a cell
-    // edge noise-dither between their own cell's biome and the nearest
-    // neighbor cell's biome, weighted by distance from the edge. Produces
-    // a fuzzy / interlocking-finger seam 32 tiles wide (this many on each
-    // side of the cell border) while keeping the bulk of each cell firmly
-    // single-biome. One chunk (16 tiles) felt natural without eating into
-    // the pure-biome interior.
-    public const int   BiomeBorderBandTiles = 16;
-
-    public const float RainMinMm      = 0f;
-    public const float RainMaxMm      = 2500f;
+    // Per-tile rainfall boost near rivers. Stays per-tile because river
+    // corridors are a local terrain feature the WorldMap knows nothing
+    // about — they emerge inside the playable pocket.
     public const float RainRiverBoostMm = 800f;
     public const int   RainRiverInner = 10;
     public const int   RainRiverOuter = 30;
 
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
-        float frequency = DefaultFrequency)
+        float frequency = DefaultFrequency, WorldMapCell? mapCell = null)
     {
         _ = frequency;
+        var cell = mapCell ?? DefaultMapCell;
         var noise = new NoiseStack(seed);
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
@@ -242,38 +233,16 @@ public static class WorldGen
         LowerBanks(heights, sizeX, sizeZ);
         tiles.SetRiverPaths(riverPaths);
 
-        // Climate pass — one sample per 256×256 cell, taken at the cell
-        // center. Biome is classified once per cell so the world reads as
-        // blocky biome patches instead of per-tile crossover fuzz. Snow on
-        // mountain peaks comes from the per-tile SnowPeakHeightTiles
-        // override below, not from a separate cell-level sample.
-        var firstCellX = FloorDiv(-halfX, Cell.SizeTiles);
-        var firstCellZ = FloorDiv(-halfZ, Cell.SizeTiles);
-        var lastCellX  = FloorDiv(halfX - 1, Cell.SizeTiles);
-        var lastCellZ  = FloorDiv(halfZ - 1, Cell.SizeTiles);
-        var cellsX = lastCellX - firstCellX + 1;
-        var cellsZ = lastCellZ - firstCellZ + 1;
-        var cellTemp  = new float[cellsX, cellsZ];
-        var cellRain  = new float[cellsX, cellsZ];
-        var cellBiome = new byte [cellsX, cellsZ];
-        Parallel.For(0, cellsX, cxi =>
-        {
-            for (var czi = 0; czi < cellsZ; czi++)
-            {
-                var cx = firstCellX + cxi;
-                var cz = firstCellZ + czi;
-                // Cell-center world tile coords (cells span [cx*S, cx*S+S)).
-                var wcx = cx * Cell.SizeTiles + Cell.SizeTiles / 2;
-                var wcz = cz * Cell.SizeTiles + Cell.SizeTiles / 2;
-                var rxi = Math.Clamp(wcx + halfX, 0, sizeX - 1);
-                var rzi = Math.Clamp(wcz + halfZ, 0, sizeZ - 1);
-                SampleClimate(noise, wcx, wcz, riverDist[rxi, rzi],
-                    halfZ, out var tempC, out var rainMm);
-                cellTemp[cxi, czi]  = tempC;
-                cellRain[cxi, czi]  = rainMm;
-                cellBiome[cxi, czi] = BiomeClassifier.Pick(tempC, rainMm);
-            }
-        });
+        // Climate + biome come straight from the supplied WorldMapCell —
+        // one biome across the whole playable pocket, stamped uniformly
+        // at every tile. River corridors still boost rainfall locally
+        // (not a biome-level effect). Snow peaks override per-tile below
+        // for tall columns in non-hot biomes.
+        var cellTempC = cell.TemperatureC;
+        var cellRainMm = cell.RainfallMm;
+        var cellBiomeId = cell.BiomeId;
+        var allowSnowPeak = cellBiomeId != BiomeBuiltins.SavannaId
+                         && cellBiomeId != BiomeBuiltins.DesertId;
 
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
@@ -319,35 +288,17 @@ public static class WorldGen
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            // One climate + biome per cell, plus two overrides:
-            //   (a) Border-band dither — tiles within BiomeBorderBandTiles
-            //       of a cell edge may re-home to the nearest neighbor cell
-            //       based on a smooth noise value weighted by distance from
-            //       the edge. Produces an interlocking-finger transition
-            //       between two biomes (~32 tiles wide) without promoting
-            //       the tile's cell to a mixed biome.
-            //   (b) Snow peaks — tiles rising SnowPeakHeightTiles above sea
-            //       level re-tag as Snow, skipped for Savanna and Desert
-            //       host cells so hot biomes keep their identity at
-            //       altitude.
-            var ownCellX = FloorDiv(x, Cell.SizeTiles);
-            var ownCellZ = FloorDiv(z, Cell.SizeTiles);
-            var cxi = ownCellX - firstCellX;
-            var czi = ownCellZ - firstCellZ;
-            var lx = x - ownCellX * Cell.SizeTiles;
-            var lz = z - ownCellZ * Cell.SizeTiles;
-            PickBorderCell(noise, x, z, cxi, czi, lx, lz,
-                cellBiome, cellsX, cellsZ,
-                out var pickedCxi, out var pickedCzi);
-            var tempC  = cellTemp[pickedCxi, pickedCzi];
-            var rainMm = cellRain[pickedCxi, pickedCzi];
-            var cellB  = cellBiome[pickedCxi, pickedCzi];
-            var biome  = cellB;
-            var allowSnowPeak = cellB != BiomeBuiltins.SavannaId
-                             && cellB != BiomeBuiltins.DesertId;
+            // Per-tile climate = cell climate + local river rainfall boost.
+            // Biome = cell biome, except tall columns in cold/temperate
+            // cells re-tag as Snow so mountains keep visible caps.
+            var rd2 = riverDist[xi, zi];
+            var riverBoost = (1f - Smoothstep(RainRiverInner, RainRiverOuter, rd2))
+                             * RainRiverBoostMm;
+            var rainMm = cellRainMm + riverBoost;
+            var biome = cellBiomeId;
             if (height - WaterLevelY >= SnowPeakHeightTiles && allowSnowPeak)
                 biome = BiomeBuiltins.SnowId;
-            tiles.SetTerrainClimate(x, z, tempC, rainMm);
+            tiles.SetTerrainClimate(x, z, cellTempC, rainMm);
             tiles.SetTerrainBiome(x, z, biome);
             // Lake-bed columns tag kind = Water to signal the mesher to emit
             // a water-plane overlay at WaterLevelY; the bed itself still
@@ -773,74 +724,6 @@ public static class WorldGen
             if (!tiles.Get(new TilePos(x, y, z)).IsEmpty) return y + 1;
         }
         return minProbe;
-    }
-
-    private static void SampleClimate(
-        NoiseStack noise, int x, int z, int riverDist,
-        int halfZ, out float tempC, out float rainMm)
-    {
-        var latFrac = halfZ > 0 ? Math.Min(1f, Math.Abs(z) / (float)halfZ) : 0f;
-        var latT = Lerp(TempEquatorC, TempPoleC, latFrac);
-        var tNoise = noise.Temperature.GetNoise(x, z) * TempNoiseAmpC;
-        tempC = latT + tNoise;
-
-        var rRaw = (noise.Rainfall.GetNoise(x, z) + 1f) * 0.5f;
-        var baseRain = Lerp(RainMinMm, RainMaxMm, rRaw);
-        var riverBoost = (1f - Smoothstep(RainRiverInner, RainRiverOuter, riverDist))
-                         * RainRiverBoostMm;
-        rainMm = Math.Clamp(baseRain + riverBoost, RainMinMm, RainMaxMm + RainRiverBoostMm);
-    }
-
-    private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);
-
-    // Pick the cell a border-band tile belongs to. If the tile is within
-    // BiomeBorderBandTiles of its nearest cell edge AND that edge has an
-    // in-bounds neighbor of a different biome, a smooth noise dither
-    // (weighted by distance to the edge) may re-home the tile to the
-    // neighbor's cell. At the edge itself the coin flip is ~50/50; at the
-    // inner boundary of the band the tile always stays in its own cell.
-    // Tiles outside the band always stay put.
-    private static void PickBorderCell(
-        NoiseStack noise, int x, int z,
-        int selfCxi, int selfCzi, int lx, int lz,
-        byte[,] cellBiome, int cellsX, int cellsZ,
-        out int pickedCxi, out int pickedCzi)
-    {
-        pickedCxi = selfCxi;
-        pickedCzi = selfCzi;
-
-        var lastLocal = Cell.SizeTiles - 1;
-        var distW = lx;
-        var distE = lastLocal - lx;
-        var distS = lz;
-        var distN = lastLocal - lz;
-        var minDist = Math.Min(Math.Min(distW, distE), Math.Min(distS, distN));
-        if (minDist >= BiomeBorderBandTiles) return;
-
-        // Candidate neighbor along the nearest edge only — corners pick one
-        // or the other based on ties, which keeps the fingers unambiguous
-        // and avoids a double dither that would wash out the finger shape.
-        var nxi = selfCxi;
-        var nzi = selfCzi;
-        if (distW == minDist && selfCxi > 0)                 nxi = selfCxi - 1;
-        else if (distE == minDist && selfCxi < cellsX - 1)   nxi = selfCxi + 1;
-        else if (distS == minDist && selfCzi > 0)            nzi = selfCzi - 1;
-        else if (distN == minDist && selfCzi < cellsZ - 1)   nzi = selfCzi + 1;
-        else return; // at world edge — no neighbor to dither with
-
-        // No transition if neighbor has the same biome: nothing to blend.
-        var selfB = cellBiome[selfCxi, selfCzi];
-        var nbrB  = cellBiome[nxi, nzi];
-        if (selfB == nbrB) return;
-
-        var n01 = (noise.BiomeBorder.GetNoise(x, z) + 1f) * 0.5f; // 0..1
-        var t   = minDist / (float)BiomeBorderBandTiles;          // 0..1
-        var threshold = 0.5f + 0.5f * t;
-        if (n01 > threshold)
-        {
-            pickedCxi = nxi;
-            pickedCzi = nzi;
-        }
     }
 
     private static float Smoothstep(float edge0, float edge1, float x)

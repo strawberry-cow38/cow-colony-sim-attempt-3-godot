@@ -55,7 +55,8 @@ public partial class SimHost : Node
 	{
 		BuiltinBiomes.RegisterAll();
 		Overworld = WorldMapGenerator.Generate(WorldSeed);
-		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize);
+		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize,
+			mapCell: Overworld.Get(CurrentMapCoord));
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
@@ -69,7 +70,8 @@ public partial class SimHost : Node
 		DespawnAllEntities();
 		Tiles.Clear();
 		Overworld = WorldMapGenerator.Generate(seed);
-		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize);
+		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize,
+			mapCell: Overworld.Get(CurrentMapCoord));
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
