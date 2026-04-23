@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using Godot;
 using fennecs;
 using CowColonySim.Sim;
@@ -15,11 +14,12 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
-	// 12 cells × 256 tiles = 3072 tiles = ~4.6 km span. Centered on origin
-	// so cells span [-6..5] on each axis, 12 fully contained cells + 0
-	// partial ones. Runtime stays flat (sim walks LIVE/AMBIENT only, draw
-	// caps at MaxChunkDistance); worldgen + RAM scale linearly with tiles.
-	public const int WorldSize = 3072;
+	// Phase 1 of the worldmap pivot: the playable world is a single 256×256
+	// tile cell (~384m square). The larger world lives in a 2D WorldMap
+	// (phase 2) and the cell you're playing is generated on demand from
+	// it. No streaming, no paging, no cells-on-disk — the whole playable
+	// region lives in memory.
+	public const int WorldSize = Cell.SizeTiles;
 	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 
@@ -31,8 +31,6 @@ public partial class SimHost : Node
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
 	public TimeOfDaySystem TimeOfDay { get; } = new();
-	public CellStore CellStore { get; }
-	public CellPagingSystem Paging { get; }
 
 	public int CurrentSeed { get; private set; } = WorldSeed;
 	private readonly Random _rng = new(WorldSeed);
@@ -40,10 +38,6 @@ public partial class SimHost : Node
 	public SimHost()
 	{
 		Loop = new SimLoop(Step);
-		var cellsDir = Path.Combine(OS.GetUserDataDir(), "cells");
-		WipeDir(cellsDir); // pre-alpha: worldgen may change between runs, don't reuse stale cells
-		CellStore = new CellStore(cellsDir);
-		Paging = new CellPagingSystem(CellStore);
 	}
 
 	public override void _Ready()
@@ -54,7 +48,7 @@ public partial class SimHost : Node
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
 		TimeOfDay.SetTicks(CalendarSystem.StartTicksOffset);
-		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}, cellsDir={CellStore.PathFor(new CellKey(0, 0))}.");
+		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
 	}
 
 	public void Regenerate(int seed)
@@ -62,10 +56,6 @@ public partial class SimHost : Node
 		CurrentSeed = seed;
 		DespawnAllEntities();
 		Tiles.Clear();
-		// Wipe any paged-out cells on disk — they're stale against the new
-		// seed. Caller owns the disk lifecycle via CellStore.
-		var cellsDir = Path.Combine(OS.GetUserDataDir(), "cells");
-		WipeDir(cellsDir);
 		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize);
 		SeedColonyClaim();
 		SeedColonists();
@@ -98,9 +88,6 @@ public partial class SimHost : Node
 			ChunkTierSystem.Step(World, Tiles);
 			Profiler.End("ChunkTier");
 		}
-		Profiler.Begin("Paging");
-		Paging.Step(Tiles, tick);
-		Profiler.End("Paging");
 		Profiler.End("Sim tick");
 		Profiler.IncRate("Sim ticks/s");
 	}
@@ -116,18 +103,6 @@ public partial class SimHost : Node
 		World.Stream<LiveAnchor>().For((in Entity e, ref LiveAnchor _) => toKill.Add(e));
 		World.Stream<Colonist>().For((in Entity e, ref Colonist _) => toKill.Add(e));
 		foreach (var e in toKill) e.Despawn();
-	}
-
-	private static void WipeDir(string dir)
-	{
-		try
-		{
-			if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-		}
-		catch (Exception e)
-		{
-			GD.PushWarning($"SimHost: failed to wipe {dir}: {e.Message}");
-		}
 	}
 
 	private void SeedColonyClaim()
