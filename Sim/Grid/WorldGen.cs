@@ -263,6 +263,7 @@ public static class WorldGen
             }
         });
 
+        TerraceLakes(heights, sizeX, sizeZ);
         CarveRiversFromPaths(heights, riverPaths, sizeX, sizeZ, halfX, halfZ, minHeight);
         LowerBanks(heights, sizeX, sizeZ);
         tiles.SetRiverPaths(riverPaths);
@@ -688,6 +689,35 @@ public static class WorldGen
             dist[xi, zi] = mask[xi, zi] ? 0 : INF;
         SweepChebyshev(dist, sizeX, sizeZ);
         return dist;
+    }
+
+    // Lake interior terracing. Without this the noise-driven lake floor
+    // can drop to -8 while the adjacent shore clamps at sea level, leaving
+    // a 4+ tile corner gap — the mesher reads that as a cliff wall and
+    // emits a stone cliff straight into the water. Rivers dodge this by
+    // carving a fixed -2 bed (gap = 2, under CliffDelta); lakes need the
+    // same guarantee without forcing everything flat.
+    //
+    // Two-pass Chebyshev distance to shore, then for every lake cell clamp
+    // the floor to at most `d` tiles below sea level. Result: one-tile
+    // terrace steps from shore to lake center. All corner gaps stay = 1
+    // tile so no shore cliff ever emits — while still allowing a real
+    // sloped bowl, deeper near the middle of big lakes.
+    private static void TerraceLakes(int[,] heights, int sizeX, int sizeZ)
+    {
+        const int INF = 1 << 20;
+        var dist = new int[sizeX, sizeZ];
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+            dist[xi, zi] = heights[xi, zi] >= WaterLevelY ? 0 : INF;
+        SweepChebyshev(dist, sizeX, sizeZ);
+        for (var xi = 0; xi < sizeX; xi++)
+        for (var zi = 0; zi < sizeZ; zi++)
+        {
+            if (heights[xi, zi] >= WaterLevelY) continue;
+            var floor = WaterLevelY - dist[xi, zi];
+            if (heights[xi, zi] < floor) heights[xi, zi] = floor;
+        }
     }
 
     private static void SweepChebyshev(int[,] dist, int sizeX, int sizeZ)
