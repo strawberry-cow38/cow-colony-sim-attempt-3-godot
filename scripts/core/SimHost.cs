@@ -35,6 +35,17 @@ public partial class SimHost : Node
 	public int CurrentSeed { get; private set; } = WorldSeed;
 	private readonly Random _rng = new(WorldSeed);
 
+	/// <summary>Abstract 100×100 overworld. Biome + climate for every
+	/// potential cell is classified once here and the playable 3D region
+	/// is generated from whichever map cell the player is currently
+	/// standing on (phase 3 wires the actual pull).</summary>
+	public WorldMap Overworld { get; private set; } = null!;
+
+	/// <summary>Map coord the 3D playable region currently represents.
+	/// Defaults to the center of the world map on new games. Eventually
+	/// travel actions will move this and trigger a regen.</summary>
+	public WorldMapCoord CurrentMapCoord { get; private set; } = CowColonySim.Sim.Grid.WorldMap.Center;
+
 	public SimHost()
 	{
 		Loop = new SimLoop(Step);
@@ -43,12 +54,13 @@ public partial class SimHost : Node
 	public override void _Ready()
 	{
 		BuiltinBiomes.RegisterAll();
+		Overworld = WorldMapGenerator.Generate(WorldSeed);
 		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize);
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
 		TimeOfDay.SetTicks(CalendarSystem.StartTicksOffset);
-		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
+		LogStartup();
 	}
 
 	public void Regenerate(int seed)
@@ -56,12 +68,27 @@ public partial class SimHost : Node
 		CurrentSeed = seed;
 		DespawnAllEntities();
 		Tiles.Clear();
+		Overworld = WorldMapGenerator.Generate(seed);
 		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize);
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
 		EmitSignal(SignalName.WorldRegenerated);
 		GD.Print($"SimHost regenerated. seed={seed}, chunks={Tiles.ChunkCount}.");
+		LogCurrentMapCell();
+	}
+
+	private void LogStartup()
+	{
+		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
+		LogCurrentMapCell();
+	}
+
+	private void LogCurrentMapCell()
+	{
+		var c = Overworld.Get(CurrentMapCoord);
+		var biome = BiomeRegistry.Get(c.BiomeId);
+		GD.Print($"WorldMap at ({CurrentMapCoord.X},{CurrentMapCoord.Z}): biome={biome.Name}, temp={c.TemperatureC:0.0}C, rain={c.RainfallMm:0}mm.");
 	}
 
 	public override void _Process(double delta)
