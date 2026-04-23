@@ -6,6 +6,7 @@ using CowColonySim.Sim;
 using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Components;
 using CowColonySim.Sim.Grid;
+using CowColonySim.Sim.Jobs;
 using CowColonySim.Sim.Pathfinding;
 using CowColonySim.Sim.Systems;
 using CowColonySim.UI;
@@ -44,6 +45,7 @@ public partial class SimHost : Node
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
 	public TimeOfDaySystem TimeOfDay { get; } = new();
+	public JobBoard JobBoard { get; private set; } = null!;
 
 	public int CurrentSeed { get; private set; } = WorldSeed;
 	private readonly Random _rng = new(WorldSeed);
@@ -100,6 +102,10 @@ public partial class SimHost : Node
 		Tiles.Clear();
 		WorldGen.Generate(Tiles, CurrentSeed, WorldSize, WorldSize,
 			overworld: Overworld, center: CurrentMapCoord);
+		var half = WorldSize / 2;
+		JobBoard = new JobBoard(
+			new TilePos(-half, 0, -half),
+			new TilePos(half - 1, 0, half - 1));
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
@@ -133,6 +139,9 @@ public partial class SimHost : Node
 	{
 		Profiler.Begin("Sim tick");
 		TimeOfDay.Step();
+		Profiler.Begin("Jobs");
+		JobSystem.Step(World, JobBoard, tick);
+		Profiler.End("Jobs");
 		Profiler.Begin("Wander");
 		WanderSystem.Step(World, Tiles, _rng, tick);
 		Profiler.End("Wander");
@@ -177,12 +186,18 @@ public partial class SimHost : Node
 	private void SeedColonists()
 	{
 		(int x, int z)[] spawnXZ = { (-1, -1), (0, 0), (1, 1) };
+		byte bucket = 0;
 		foreach (var (x, z) in spawnXZ)
 		{
 			var y = WorldGen.SurfaceY(Tiles, x, z);
 			var cow = World.Spawn();
 			cow.Add(new Colonist());
 			cow.Add(TileMath.FeetOfTile(new TilePos(x, y, z)));
+			cow.Add(CurrentJob.None);
+			// Distribute starting stagger buckets across colonists so their
+			// job re-evals don't land on the same tick.
+			cow.Add(JobEvalState.Fresh((byte)(bucket++ % JobSystem.StaggerPeriod)));
+			cow.Add(new JobDirty());
 		}
 	}
 }
