@@ -44,6 +44,12 @@ public sealed class TerrainChunk
     /// </summary>
     public readonly byte[,] Kinds = new byte[Size, Size];
 
+    /// <summary>Mean annual temperature in Celsius at the column surface.</summary>
+    public readonly float[,] Temperature = new float[Size, Size];
+
+    /// <summary>Mean annual rainfall in millimetres at the column surface.</summary>
+    public readonly float[,] Rainfall = new float[Size, Size];
+
     public int Revision { get; private set; }
 
     public void SetColumnHeight(int lx, int lz, short h)
@@ -71,6 +77,14 @@ public sealed class TerrainChunk
     {
         if (Kinds[lx, lz] == kind) return;
         Kinds[lx, lz] = kind;
+        Revision++;
+    }
+
+    public void SetClimate(int lx, int lz, float temperatureC, float rainfallMm)
+    {
+        if (Temperature[lx, lz] == temperatureC && Rainfall[lx, lz] == rainfallMm) return;
+        Temperature[lx, lz] = temperatureC;
+        Rainfall[lx, lz] = rainfallMm;
         Revision++;
     }
 }

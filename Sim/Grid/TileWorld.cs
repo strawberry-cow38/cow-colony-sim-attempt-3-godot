@@ -188,6 +188,30 @@ public sealed class TileWorld
         MutationTick++;
     }
 
+    /// <summary>
+    /// Store mean annual temperature (°C) and rainfall (mm) for tile (x, z).
+    /// Worldgen writes this; later systems (biome classifier, crop growth,
+    /// weather) read it.
+    /// </summary>
+    public void SetTerrainClimate(int x, int z, float temperatureC, float rainfallMm)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetClimate(lx, lz, temperatureC, rainfallMm);
+        MutationTick++;
+    }
+
+    public float TemperatureAt(int x, int z)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.Temperature[lx, lz] : 0f;
+    }
+
+    public float RainfallAt(int x, int z)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.Rainfall[lx, lz] : 0f;
+    }
+
     public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 

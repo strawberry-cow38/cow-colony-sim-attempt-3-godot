@@ -21,8 +21,8 @@ public partial class TileInfoHud : CanvasLayer
             AnchorRight = 0f,
             AnchorBottom = 1f,
             OffsetLeft = 8f,
-            // Three lines × 18pt font with some breathing room.
-            OffsetTop = -70f,
+            // Four lines × 18pt font with some breathing room.
+            OffsetTop = -92f,
             OffsetBottom = -8f,
             OffsetRight = 320f,
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -60,8 +60,12 @@ public partial class TileInfoHud : CanvasLayer
         var cellState = _sim.Tiles.GetCellState(cell);
         var cellChunks = _sim.Tiles.GetChunksInCell(cell)?.Count ?? 0;
 
+        var tempC = _sim.Tiles.TemperatureAt(tileWithY.X, tileWithY.Z);
+        var rainMm = _sim.Tiles.RainfallAt(tileWithY.X, tileWithY.Z);
+
         _label.Text =
             $"tile: ({tileWithY.X}, {tileWithY.Y}, {tileWithY.Z})\n" +
-            $"cell: ({cell.X}, {cell.Z})  {cellState}  chunks:{cellChunks}";
+            $"cell: ({cell.X}, {cell.Z})  {cellState}  chunks:{cellChunks}\n" +
+            $"climate: {tempC:0.0}°C  {rainMm:0}mm/yr";
     }
 }

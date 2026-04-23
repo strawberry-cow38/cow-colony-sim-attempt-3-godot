@@ -90,6 +90,24 @@ public static class WorldGen
     private const int   CoastRadiusTiles  = 48;
     private const float CoastFloor        = -5f;
 
+    // Climate. Latitude-driven base temperature plus a slow noise wobble and
+    // an elevation lapse. Rainfall is low-freq noise biased up near rivers.
+    // These are *mean annual* values stamped once at worldgen; a later
+    // weather system can animate deltas on top.
+    //
+    // Latitude runs along the Z axis: |z|/halfZ = 0 at the equator, 1 at the
+    // pole. EquatorC warms the tropics, PoleC cools the arctic rim.
+    public const float TempEquatorC   = 28f;
+    public const float TempPoleC      = -20f;
+    public const float TempNoiseAmpC  = 4f;
+    public const float TempLapsePerTileAboveSea = 0.35f;
+
+    public const float RainMinMm      = 0f;
+    public const float RainMaxMm      = 2500f;
+    public const float RainRiverBoostMm = 800f;
+    public const int   RainRiverInner = 10;
+    public const int   RainRiverOuter = 30;
+
     public static int Generate(TileWorld tiles, int seed, int sizeX, int sizeZ,
         int minHeight = DefaultMinHeight, int maxHeight = DefaultMaxHeight,
         float frequency = DefaultFrequency)
@@ -204,6 +222,25 @@ public static class WorldGen
         LowerBanks(heights, sizeX, sizeZ);
         tiles.SetRiverPaths(riverPaths);
 
+        // Climate pass — run after heights are finalized so the lapse rate
+        // uses the carved/lowered surface, not the raw noise column. Pure
+        // per-column sample (noise + finalized height + river-distance
+        // field), safe to parallelize.
+        var temperature = new float[sizeX, sizeZ];
+        var rainfall    = new float[sizeX, sizeZ];
+        Parallel.For(0, sizeX, xi =>
+        {
+            for (var zi = 0; zi < sizeZ; zi++)
+            {
+                var x = xi - halfX;
+                var z = zi - halfZ;
+                SampleClimate(noise, x, z, heights[xi, zi], riverDist[xi, zi],
+                    halfZ, out var tempC, out var rainMm);
+                temperature[xi, zi] = tempC;
+                rainfall[xi, zi]    = rainMm;
+            }
+        });
+
         var solid = new Tile(TileKind.Solid);
         var grass = new Tile(TileKind.Floor);
         var water = new Tile(TileKind.Water);
@@ -248,6 +285,7 @@ public static class WorldGen
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
+            tiles.SetTerrainClimate(x, z, temperature[xi, zi], rainfall[xi, zi]);
             // Lake-bed columns tag kind = Water to signal the mesher to emit
             // a water-plane overlay at WaterLevelY; the bed itself still
             // renders with sand top + walls.
@@ -672,6 +710,24 @@ public static class WorldGen
             if (!tiles.Get(new TilePos(x, y, z)).IsEmpty) return y + 1;
         }
         return minProbe;
+    }
+
+    private static void SampleClimate(
+        NoiseStack noise, int x, int z, int height, int riverDist,
+        int halfZ, out float tempC, out float rainMm)
+    {
+        var latFrac = halfZ > 0 ? Math.Min(1f, Math.Abs(z) / (float)halfZ) : 0f;
+        var latT = Lerp(TempEquatorC, TempPoleC, latFrac);
+        var tNoise = noise.Temperature.GetNoise(x, z) * TempNoiseAmpC;
+        var heightAboveSea = Math.Max(0, height - WaterLevelY);
+        var lapse = heightAboveSea * TempLapsePerTileAboveSea;
+        tempC = latT + tNoise - lapse;
+
+        var rRaw = (noise.Rainfall.GetNoise(x, z) + 1f) * 0.5f;
+        var baseRain = Lerp(RainMinMm, RainMaxMm, rRaw);
+        var riverBoost = (1f - Smoothstep(RainRiverInner, RainRiverOuter, riverDist))
+                         * RainRiverBoostMm;
+        rainMm = Math.Clamp(baseRain + riverBoost, RainMinMm, RainMaxMm + RainRiverBoostMm);
     }
 
     private static float Smoothstep(float edge0, float edge1, float x)
