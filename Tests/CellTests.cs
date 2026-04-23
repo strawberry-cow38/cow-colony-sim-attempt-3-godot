@@ -13,8 +13,8 @@ public class CellTests
     [Fact]
     public void Cell_Size_Is_Consistent()
     {
-        Assert.Equal(16, Cell.SizeChunks);
-        Assert.Equal(16 * Chunk.Size, Cell.SizeTiles);
+        Assert.Equal(SimConstants.CellSizeChunks, Cell.SizeChunks);
+        Assert.Equal(Cell.SizeChunks * Chunk.Size, Cell.SizeTiles);
         Assert.Equal(SimConstants.CellSizeTiles, Cell.SizeTiles);
     }
 
