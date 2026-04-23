@@ -224,30 +224,14 @@ public sealed partial class GridRenderer : Node3D
             var cellRange = (MaxChunkDistance + Cell.SizeChunks - 1) / Cell.SizeChunks;
             long maxDistSq = (long)MaxChunkDistance * MaxChunkDistance;
             long tier0Sq = (long)Tier0Range * Tier0Range;
-            long tier1Sq = (long)Tier1Range * Tier1Range;
-            // Extend LIVE two chunks past tier1 so L1 meshes overlap the band
-            // where G4's fade-in has already reached full opacity. Without the
-            // overlap, L1 ends sharply at tier1m and any height disagreement
-            // between L1's per-tile voxel cliffs and G4's per-cell (4×4 tile
-            // avg) cliffs punches a visible crack. A 2-chunk overlap also
-            // masks the camera-pan pop when a freshly classified L1 chunk
-            // replaces the G4 surface — the swap happens inside the overlap
-            // band where the eye is already reading fog, so it reads as a
-            // soft detail-add instead of a sharp geometry flip.
-            long tier1OuterSq = (long)(Tier1Range + 2) * (Tier1Range + 2);
-            // Overlap bands. L1/G4 boundary: G4 extends 1 chunk INTO L1
-            // territory so it can fade in where L1 covers it (tier1InnerSq).
-            // G4/G8 boundary: G4's fade_out covers [tier3, tier3+1 chunk], so
-            // Classify extends G4 groups a few chunks FURTHER (Prewarm) to let
-            // the async mesh builder finish before the camera pans into the
-            // fade band — otherwise a new G4 group entering range renders a
-            // few frames late and leaves a visible "pop" where G8 alone was
-            // still in its fade-in partial state. Same trick on G8's far-side
-            // entry so G8 is built while it's still inside tier3 interior.
-            const int Prewarm = 3;
-            long tier1InnerSq = (long)(Tier1Range - 1) * (Tier1Range - 1);
-            long tier3OuterPrewarmSq = (long)(Tier3Range + Prewarm) * (Tier3Range + Prewarm);
-            long tier3InnerPrewarmSq = (long)(Tier3Range - Prewarm) * (Tier3Range - Prewarm);
+            // Static cell-based LOD: the 256×256 play pocket (centered on the
+            // world origin) always renders at L0/L1 detail, and the 8 neighbor
+            // cells always render via G4/G8 groups. LOD no longer switches
+            // with camera pan — only L0 near-camera voxel coverage keeps a
+            // small distance check (empty today, reserved for future rock /
+            // wall / building voxel meshes). This kills the LOD pop-through
+            // master was seeing on long camera pans inside the pocket.
+            var halfChunks = Cell.SizeChunks / 2;
             for (var cx = camCellX - cellRange; cx <= camCellX + cellRange; cx++)
             for (var cz = camCellZ - cellRange; cz <= camCellZ + cellRange; cz++)
             {
@@ -261,24 +245,19 @@ public sealed partial class GridRenderer : Node3D
                     long dSq = dx * dx + dz * dz;
                     if (dSq > maxDistSq) continue;
 
-                    var g4Key  = GroupKey(ck, Group4);
-                    var g8Key  = GroupKey(ck, Group8);
-                    long g4MinSq  = GroupMinDistSq(g4Key, Group4, camChunkX, camChunkZ);
-                    long g4MaxSq  = GroupMaxDistSq(g4Key, Group4, camChunkX, camChunkZ);
-                    long g8MinSq  = GroupMinDistSq(g8Key, Group8, camChunkX, camChunkZ);
-                    long g8MaxSq  = GroupMaxDistSq(g8Key, Group8, camChunkX, camChunkZ);
-
-                    if (dSq <= tier1OuterSq)
+                    var inPlayCell = ck.X >= -halfChunks && ck.X < halfChunks
+                                  && ck.Z >= -halfChunks && ck.Z < halfChunks;
+                    if (inPlayCell)
+                    {
                         perChunkTier[ck] = dSq <= tier0Sq ? 0 : 1;
-                    // Group needed if ANY chunk in it falls past the tier's fade-in
-                    // edge (use MAX dist); cull if WHOLLY past the coarse tier's end
-                    // (use MIN dist). Using MIN for both caused straddling groups
-                    // (near corner in close zone, far corner past tier1) to be
-                    // skipped entirely, leaving uncovered holes between L1 and G4.
-                    if (g4MaxSq > tier1InnerSq && g4MinSq <= tier3OuterPrewarmSq)
+                    }
+                    else
+                    {
+                        var g4Key = GroupKey(ck, Group4);
+                        var g8Key = GroupKey(ck, Group8);
                         AddToBucket(g4Masks, g4Key, ck);
-                    if (g8MaxSq > tier3InnerPrewarmSq)
                         AddToBucket(g8Masks, g8Key, ck);
+                    }
                 }
             }
 

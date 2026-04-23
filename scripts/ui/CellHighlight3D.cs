@@ -22,8 +22,8 @@ public partial class CellHighlight3D : Node3D
 
     // Wall translucency. Low alpha keeps the interior readable; neutral
     // gray reads as a boundary marker without fighting biome palettes.
-    private static readonly Color WallColor = new(0.70f, 0.72f, 0.75f, 0.12f);
-    private static readonly Color WireColor = new(0.80f, 0.82f, 0.85f, 1.0f);
+    private static readonly Color WallColor = new(0.28f, 0.30f, 0.33f, 0.14f);
+    private static readonly Color WireColor = new(0.38f, 0.40f, 0.43f, 1.0f);
 
     public override void _Ready()
     {
