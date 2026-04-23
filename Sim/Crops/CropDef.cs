@@ -29,4 +29,10 @@ public readonly record struct CropDef(
     float TrunkHeightMeters,
     float TrunkRadiusMeters,
     float CanopyHeightMeters,
-    float CanopyRadiusMeters);
+    float CanopyRadiusMeters,
+    // Optional .glb model. When non-null the renderer uses MultiMesh
+    // instancing of the model's mesh(es) and ignores the procedural
+    // trunk/canopy fields. ModelHeightMeters is the tree's full height
+    // at growth=1 — the renderer scales the native mesh to hit this.
+    string? ModelPath = null,
+    float ModelHeightMeters = 0f);

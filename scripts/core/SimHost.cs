@@ -110,7 +110,7 @@ public partial class SimHost : Node
 			new TilePos(half - 1, 0, half - 1));
 		SeedColonyClaim();
 		SeedColonists();
-		var treeCount = TreeScatter.Populate(World, Tiles, PocketSize / 2, _rng);
+		var treeCount = TreeScatter.Populate(World, Tiles, WorldSize / 2, _rng);
 		GD.Print($"SimHost seeded {treeCount} trees.");
 		ChunkTierSystem.Step(World, Tiles);
 		AwaitingWorldSelection = false;

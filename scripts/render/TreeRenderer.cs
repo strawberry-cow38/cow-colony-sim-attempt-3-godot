@@ -7,21 +7,33 @@ using CowColonySim.Sim.Crops;
 namespace CowColonySim.Render;
 
 /// <summary>
-/// Renders every <see cref="Crop"/> entity as a trunk + canopy pair of
-/// <see cref="MeshInstance3D"/>s scaled by <see cref="Crop.Growth"/>.
+/// MultiMesh-instanced renderer for every <see cref="Crop"/> entity. One
+/// <see cref="MultiMeshInstance3D"/> per crop kind — all trees of that
+/// kind draw in a single batched call regardless of count.
 ///
-/// Meshes + materials are cached per kind — adding a new crop kind means
-/// registering a <see cref="CropDef"/> and letting the renderer discover it
-/// on first sighting. Per-frame work is O(crops): walk the ECS, add/update
-/// nodes for live entities, prune nodes for despawned ones.
+/// Each frame walks the Crop stream, groups by kind, resizes the per-kind
+/// MultiMesh instance count, and writes per-instance transforms (scale
+/// from <see cref="Crop.Growth"/>, position from <see cref="CropTile.Pos"/>).
 ///
-/// Not yet: LOD / MultiMesh instancing. Profile once densities get noisy.
+/// Mesh source: <see cref="CropDef.ModelPath"/> loads a .glb at boot and
+/// scales to <see cref="CropDef.ModelHeightMeters"/>. Falls back to a
+/// procedural trunk+canopy pair if the model fails to load (kept simple —
+/// fallback reuses the original node-per-tree path for visibility, not
+/// performance).
 /// </summary>
 public sealed partial class TreeRenderer : Node3D
 {
     private SimHost? _simHost;
-    private readonly Dictionary<byte, (Mesh trunk, Mesh canopy, StandardMaterial3D trunkMat, StandardMaterial3D canopyMat)> _kindCache = new();
-    private readonly Dictionary<Entity, (MeshInstance3D trunk, MeshInstance3D canopy, byte kindId)> _instances = new();
+    private readonly Dictionary<byte, KindState> _byKind = new();
+    private readonly List<(byte kind, Transform3D xform)> _scratch = new();
+
+    private sealed class KindState
+    {
+        public MultiMeshInstance3D Node = null!;
+        public MultiMesh Mesh = null!;
+        public float NativeHeightMeters;
+        public float TargetHeightMeters;
+    }
 
     public override void _Ready()
     {
@@ -32,103 +44,110 @@ public sealed partial class TreeRenderer : Node3D
     {
         if (_simHost == null) return;
 
-        var seen = new HashSet<Entity>();
-        _simHost.World.Stream<Crop, CropTile>().For((in Entity e, ref Crop crop, ref CropTile tile) =>
+        _scratch.Clear();
+        _simHost.World.Stream<Crop, CropTile>().For((ref Crop crop, ref CropTile tile) =>
         {
-            seen.Add(e);
             var def = CropRegistry.Get(crop.KindId);
             if (def.Id == CropRegistry.NoCrop) return;
-            EnsureKindMeshes(def);
-
-            if (!_instances.TryGetValue(e, out var slot) || slot.kindId != crop.KindId)
-            {
-                if (_instances.TryGetValue(e, out var stale))
-                {
-                    stale.trunk.QueueFree();
-                    stale.canopy.QueueFree();
-                }
-                var kind = _kindCache[crop.KindId];
-                var trunkMi = new MeshInstance3D { Mesh = kind.trunk, MaterialOverride = kind.trunkMat };
-                var canopyMi = new MeshInstance3D { Mesh = kind.canopy, MaterialOverride = kind.canopyMat };
-                AddChild(trunkMi);
-                AddChild(canopyMi);
-                slot = (trunkMi, canopyMi, crop.KindId);
-                _instances[e] = slot;
-            }
-
-            ApplyTransform(slot.trunk, slot.canopy, def, tile.Pos, crop.Growth);
+            var state = EnsureKind(def);
+            if (state == null) return;
+            _scratch.Add((crop.KindId, BuildTransform(state, tile.Pos, crop.Growth)));
         });
 
-        if (seen.Count == _instances.Count) return;
-        var stale = new List<Entity>();
-        foreach (var kv in _instances) if (!seen.Contains(kv.Key)) stale.Add(kv.Key);
-        foreach (var e in stale)
+        // Bucket per kind. Reset counts first so kinds that have no crops
+        // this frame go to zero.
+        foreach (var kv in _byKind) kv.Value.Mesh.VisibleInstanceCount = 0;
+        // Second pass writes. Group by kind into per-kind counters.
+        var counters = new Dictionary<byte, int>();
+        foreach (var (kind, xform) in _scratch)
         {
-            var slot = _instances[e];
-            slot.trunk.QueueFree();
-            slot.canopy.QueueFree();
-            _instances.Remove(e);
+            counters.TryGetValue(kind, out var idx);
+            var state = _byKind[kind];
+            if (state.Mesh.InstanceCount <= idx)
+            {
+                // Grow capacity in ~doubling chunks; SetInstanceCount nukes
+                // existing transforms so we only resize upward in batches.
+                var next = System.Math.Max(16, state.Mesh.InstanceCount * 2);
+                while (next <= idx) next *= 2;
+                state.Mesh.InstanceCount = next;
+            }
+            state.Mesh.SetInstanceTransform(idx, xform);
+            counters[kind] = idx + 1;
         }
+        foreach (var (kind, count) in counters)
+            _byKind[kind].Mesh.VisibleInstanceCount = count;
     }
 
-    private void EnsureKindMeshes(CropDef def)
+    private KindState? EnsureKind(CropDef def)
     {
-        if (_kindCache.ContainsKey(def.Id)) return;
-        var trunkMat = new StandardMaterial3D
+        if (_byKind.TryGetValue(def.Id, out var existing)) return existing;
+        var mesh = def.ModelPath != null ? LoadFirstMesh(def.ModelPath) : null;
+        if (mesh == null)
         {
-            AlbedoColor = HexColor(def.TrunkColor),
-            Roughness = 0.95f,
-        };
-        var canopyMat = new StandardMaterial3D
+            GD.PushWarning($"TreeRenderer: failed to load mesh for {def.Name} (path={def.ModelPath})");
+            return null;
+        }
+        var nativeH = mesh.GetAabb().Size.Y;
+        if (nativeH <= 0.0001f) nativeH = 1f;
+        var mm = new MultiMesh
         {
-            AlbedoColor = HexColor(def.CanopyColor),
-            Roughness = 0.9f,
+            Mesh = mesh,
+            TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+            InstanceCount = 0,
+            VisibleInstanceCount = 0,
         };
-        var trunk = new CylinderMesh
+        var mmi = new MultiMeshInstance3D { Multimesh = mm };
+        AddChild(mmi);
+        var state = new KindState
         {
-            TopRadius = def.TrunkRadiusMeters,
-            BottomRadius = def.TrunkRadiusMeters,
-            Height = def.TrunkHeightMeters,
+            Node = mmi,
+            Mesh = mm,
+            NativeHeightMeters = nativeH,
+            TargetHeightMeters = def.ModelHeightMeters > 0 ? def.ModelHeightMeters : def.TrunkHeightMeters + def.CanopyHeightMeters,
         };
-        Mesh canopy = def.CanopyShape switch
-        {
-            CanopyShape.Cone => new CylinderMesh
-            {
-                TopRadius = 0.01f,
-                BottomRadius = def.CanopyRadiusMeters,
-                Height = def.CanopyHeightMeters,
-            },
-            CanopyShape.Cube => new BoxMesh
-            {
-                Size = new Vector3(def.CanopyRadiusMeters * 2f, def.CanopyHeightMeters, def.CanopyRadiusMeters * 2f),
-            },
-            _ => new SphereMesh
-            {
-                Radius = def.CanopyRadiusMeters,
-                Height = def.CanopyHeightMeters,
-            },
-        };
-        _kindCache[def.Id] = (trunk, canopy, trunkMat, canopyMat);
+        _byKind[def.Id] = state;
+        return state;
     }
 
-    private static void ApplyTransform(MeshInstance3D trunk, MeshInstance3D canopy, CropDef def, CowColonySim.Sim.Grid.TilePos feet, float growth)
+    private static Transform3D BuildTransform(KindState state, CowColonySim.Sim.Grid.TilePos feet, float growth)
     {
-        // Clamp sapling size — pure growth=0 reads as invisible.
-        var scale = Mathf.Lerp(0.25f, 1.0f, growth);
+        // Clamp sapling scale — pure growth=0 reads as invisible.
+        var growthScale = Mathf.Lerp(0.25f, 1.0f, growth);
+        var s = (state.TargetHeightMeters / state.NativeHeightMeters) * growthScale;
         var x = feet.X + 0.5f;
         var z = feet.Z + 0.5f;
         var baseY = feet.Y * CowColonySim.Sim.SimConstants.TileHeightMeters;
-        trunk.Scale = new Vector3(scale, scale, scale);
-        trunk.Position = new Vector3(x, baseY + def.TrunkHeightMeters * scale * 0.5f, z);
-        canopy.Scale = new Vector3(scale, scale, scale);
-        canopy.Position = new Vector3(
-            x,
-            baseY + def.TrunkHeightMeters * scale + def.CanopyHeightMeters * scale * 0.5f,
-            z);
+        var basis = Basis.Identity.Scaled(new Vector3(s, s, s));
+        return new Transform3D(basis, new Vector3(x, baseY, z));
     }
 
-    private static Color HexColor(uint rgb) => new(
-        ((rgb >> 16) & 0xFF) / 255f,
-        ((rgb >> 8) & 0xFF) / 255f,
-        (rgb & 0xFF) / 255f);
+    private static Mesh? LoadFirstMesh(string resPath)
+    {
+        var absolute = ProjectSettings.GlobalizePath(resPath);
+        if (!System.IO.File.Exists(absolute))
+        {
+            GD.PushWarning($"TreeRenderer: file not found at {absolute}");
+            return null;
+        }
+        var doc = new GltfDocument();
+        var state = new GltfState();
+        var err = doc.AppendFromFile(absolute, state);
+        if (err != Error.Ok) return null;
+        var scene = doc.GenerateScene(state);
+        if (scene == null) return null;
+        var mesh = FindFirstMesh(scene);
+        scene.QueueFree();
+        return mesh;
+    }
+
+    private static Mesh? FindFirstMesh(Node n)
+    {
+        if (n is MeshInstance3D mi && mi.Mesh != null) return mi.Mesh;
+        foreach (var child in n.GetChildren())
+        {
+            var m = FindFirstMesh(child);
+            if (m != null) return m;
+        }
+        return null;
+    }
 }
