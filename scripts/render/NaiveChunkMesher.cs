@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using Godot;
+using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.Render;
@@ -414,6 +416,35 @@ public sealed class NaiveChunkMesher : IChunkMesher
         {
             if (corners[0, pz] == 0f) corners[0, pz] = corners[1, pz];
             if (corners[cornersSize - 1, pz] == 0f) corners[cornersSize - 1, pz] = corners[cornersSize - 2, pz];
+        }
+
+        // Mountain re-tag: sampled biome comes from the cell's mid tile, which
+        // can sit below MountainStoneHeight while its four corners tower over
+        // it. Mirror WorldGen's per-tile altitude override using max corner
+        // height so distant peaks read as gray stone / white snow rather than
+        // green grass at the near-tier's same altitude.
+        for (var kz = 0; kz < kindsSize; kz++)
+        for (var kx = 0; kx < kindsSize; kx++)
+        {
+            var b = biomes[kx, kz];
+            if (b == 0) continue;
+            int px0, px1, pz0, pz1;
+            if (kx == 0) { px0 = 0; px1 = 0; }
+            else if (kx == kindsSize - 1) { px0 = cornersSize - 1; px1 = cornersSize - 1; }
+            else { px0 = 2 * (kx - 1) + 1; px1 = 2 * (kx - 1) + 2; }
+            if (kz == 0) { pz0 = 0; pz1 = 0; }
+            else if (kz == kindsSize - 1) { pz0 = cornersSize - 1; pz1 = cornersSize - 1; }
+            else { pz0 = 2 * (kz - 1) + 1; pz1 = 2 * (kz - 1) + 2; }
+            var maxC = Math.Max(Math.Max(corners[px0, pz0], corners[px1, pz0]),
+                                Math.Max(corners[px0, pz1], corners[px1, pz1]));
+            var altitudeTiles = maxC / th - WorldGen.WaterLevelY;
+            if (altitudeTiles >= WorldGen.MountainStoneHeightTiles && b != BiomeBuiltins.DesertId)
+                b = BiomeBuiltins.StoneId;
+            if (altitudeTiles >= WorldGen.SnowPeakHeightTiles
+                && b != BiomeBuiltins.DesertId
+                && b != BiomeBuiltins.SavannaId)
+                b = BiomeBuiltins.SnowId;
+            biomes[kx, kz] = b;
         }
 
         return new CornerHeightmapPatch

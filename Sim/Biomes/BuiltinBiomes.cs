@@ -62,7 +62,7 @@ public static class BuiltinBiomes
     // muddy to a dirty tan). Slight blue bias reads as cool stone rather
     // than warm dirt. Used by WorldGen to re-tag tall non-desert columns.
     public static readonly BiomeDef Stone =
-        new(BiomeBuiltins.StoneId, "Stone", TileKind.Floor, 0.55f, 0.55f, 0.58f,
+        new(BiomeBuiltins.StoneId, "Stone", TileKind.Floor, 0.32f, 0.32f, 0.36f,
             TopAtlasCellOverride: 9, SideAtlasCellOverride: 9);
 
     public static void RegisterAll()
