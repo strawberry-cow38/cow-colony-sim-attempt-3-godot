@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Godot;
+using CowColonySim.Audio;
 using CowColonySim.Render;
 
 namespace CowColonySim.UI;
@@ -43,6 +44,8 @@ public sealed partial class SettingsMenu : CanvasLayer
     private HSlider _renderDistanceSlider = null!;
     private Label _renderDistanceLabel = null!;
     private CheckBox _legacyTerrainCheck = null!;
+    private HSlider _ambientVolumeSlider = null!;
+    private Label _ambientVolumeLabel = null!;
 
     private int _resolutionIndex = 2;
     private int _windowModeIndex = 0;
@@ -52,6 +55,7 @@ public sealed partial class SettingsMenu : CanvasLayer
     private bool _vsyncEnabled = false;
     private int _renderDistance = 128;
     private bool _legacyTerrainVisible = false;
+    private float _ambientVolume = 0.7f;     // 0..1 linear, mapped to dB
 
     public override void _Ready()
     {
@@ -60,6 +64,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         ApplyWindow();
         ApplyRendering();
         ApplyWorld();
+        ApplyAudio();
         BuildUi();
         _panel.Visible = false;
     }
@@ -158,6 +163,24 @@ public sealed partial class SettingsMenu : CanvasLayer
         vb.AddChild(_legacyTerrainCheck);
 
         vb.AddChild(new HSeparator());
+        vb.AddChild(new Label { Text = "Audio" });
+        _ambientVolumeLabel = new Label { Text = $"Ambient: {AmbientPercentText()}" };
+        vb.AddChild(_ambientVolumeLabel);
+        _ambientVolumeSlider = new HSlider
+        {
+            MinValue = 0, MaxValue = 1, Step = 0.01, Value = _ambientVolume,
+            CustomMinimumSize = new Vector2(0, 24),
+        };
+        _ambientVolumeSlider.ValueChanged += v =>
+        {
+            _ambientVolume = (float)v;
+            _ambientVolumeLabel.Text = $"Ambient: {AmbientPercentText()}";
+            ApplyAudio();
+            Save();
+        };
+        vb.AddChild(_ambientVolumeSlider);
+
+        vb.AddChild(new HSeparator());
         _checkUpdateButton = new Button { Text = "Check for Updates" };
         _checkUpdateButton.Pressed += OnCheckUpdatePressed;
         vb.AddChild(_checkUpdateButton);
@@ -214,6 +237,31 @@ public sealed partial class SettingsMenu : CanvasLayer
         GridRenderer.ShowVoxelTerrain = _legacyTerrainVisible;
     }
 
+    private void ApplyAudio()
+    {
+        // Ambient bus is created lazily by AmbientAudio._Ready. If we beat
+        // it, the bus lookup fails silently — AmbientAudio will copy the
+        // saved volume itself on startup via the SettingsMenu ctor.
+        var idx = AudioServer.GetBusIndex(AmbientAudio.AmbientBus);
+        if (idx == -1)
+        {
+            AmbientAudio.PendingVolumeDb = LinearToDb(_ambientVolume);
+            return;
+        }
+        AudioServer.SetBusVolumeDb(idx, LinearToDb(_ambientVolume));
+        AudioServer.SetBusMute(idx, _ambientVolume <= 0.001f);
+    }
+
+    private string AmbientPercentText() => $"{(int)Mathf.Round(_ambientVolume * 100)}%";
+
+    // Perceptual audio slider — linear 0-1 maps to -60 dB (silent) → 0 dB.
+    // Slider of 1 = full volume; below ~0.001 treated as mute to avoid dB=-inf.
+    private static float LinearToDb(float linear)
+    {
+        if (linear <= 0.001f) return -80f;
+        return 20f * Mathf.Log(linear) / Mathf.Log(10f);
+    }
+
     private void Load()
     {
         var cfg = new ConfigFile();
@@ -226,6 +274,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         _vsyncEnabled = (bool)cfg.GetValue("render", "vsync", false);
         _renderDistance = Mathf.Clamp((int)cfg.GetValue("world", "render_distance", 128), 8, 256);
         _legacyTerrainVisible = (bool)cfg.GetValue("world", "legacy_terrain", false);
+        _ambientVolume = Mathf.Clamp((float)(double)cfg.GetValue("audio", "ambient_volume", 0.7), 0f, 1f);
     }
 
     private void Save()
@@ -239,6 +288,7 @@ public sealed partial class SettingsMenu : CanvasLayer
         cfg.SetValue("render", "vsync", _vsyncEnabled);
         cfg.SetValue("world", "render_distance", _renderDistance);
         cfg.SetValue("world", "legacy_terrain", _legacyTerrainVisible);
+        cfg.SetValue("audio", "ambient_volume", _ambientVolume);
         cfg.Save(ConfigPath);
     }
 

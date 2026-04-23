@@ -14,6 +14,7 @@
 [ext_resource type="Script" path="res://scripts/ui/TimeHud.cs" id="12_timehud"]
 [ext_resource type="Script" path="res://scripts/ui/CellHighlight3D.cs" id="13_cellhilite"]
 [ext_resource type="Script" path="res://scripts/ui/WorldMapHud.cs" id="15_worldmap"]
+[ext_resource type="Script" path="res://scripts/audio/AmbientAudio.cs" id="16_ambient"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -68,3 +69,6 @@ script = ExtResource("13_cellhilite")
 
 [node name="WorldMapHud" type="CanvasLayer" parent="."]
 script = ExtResource("15_worldmap")
+
+[node name="AmbientAudio" type="Node" parent="."]
+script = ExtResource("16_ambient")
