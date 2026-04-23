@@ -4,6 +4,7 @@ using System.IO;
 using Godot;
 using fennecs;
 using CowColonySim.Sim;
+using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Components;
 using CowColonySim.Sim.Grid;
 using CowColonySim.Sim.Pathfinding;
@@ -43,6 +44,7 @@ public partial class SimHost : Node
 
 	public override void _Ready()
 	{
+		BuiltinBiomes.RegisterAll();
 		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize);
 		SeedColonyClaim();
 		SeedColonists();

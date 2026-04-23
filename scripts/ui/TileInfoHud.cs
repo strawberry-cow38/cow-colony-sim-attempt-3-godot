@@ -1,5 +1,6 @@
 using Godot;
 using CowColonySim.Render;
+using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.UI;
@@ -21,8 +22,8 @@ public partial class TileInfoHud : CanvasLayer
             AnchorRight = 0f,
             AnchorBottom = 1f,
             OffsetLeft = 8f,
-            // Four lines × 18pt font with some breathing room.
-            OffsetTop = -92f,
+            // Five lines × 18pt font with some breathing room.
+            OffsetTop = -114f,
             OffsetBottom = -8f,
             OffsetRight = 320f,
             HorizontalAlignment = HorizontalAlignment.Left,
@@ -62,10 +63,13 @@ public partial class TileInfoHud : CanvasLayer
 
         var tempC = _sim.Tiles.TemperatureAt(tileWithY.X, tileWithY.Z);
         var rainMm = _sim.Tiles.RainfallAt(tileWithY.X, tileWithY.Z);
+        var biomeId = _sim.Tiles.BiomeAt(tileWithY.X, tileWithY.Z);
+        var biome = BiomeRegistry.Get(biomeId);
 
         _label.Text =
             $"tile: ({tileWithY.X}, {tileWithY.Y}, {tileWithY.Z})\n" +
             $"cell: ({cell.X}, {cell.Z})  {cellState}  chunks:{cellChunks}\n" +
-            $"climate: {tempC:0.0}°C  {rainMm:0}mm/yr";
+            $"climate: {tempC:0.0}°C  {rainMm:0}mm/yr\n" +
+            $"biome: {biome.Name}";
     }
 }

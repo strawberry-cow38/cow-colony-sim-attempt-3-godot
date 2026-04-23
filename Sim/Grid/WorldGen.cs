@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using CowColonySim.Sim.Biomes;
 
 namespace CowColonySim.Sim.Grid;
 
@@ -286,6 +287,7 @@ public static class WorldGen
 
             tiles.SetTerrainHeight(x, z, (short)height);
             tiles.SetTerrainClimate(x, z, temperature[xi, zi], rainfall[xi, zi]);
+            tiles.SetTerrainBiome(x, z, BiomeClassifier.Pick(temperature[xi, zi], rainfall[xi, zi]));
             // Lake-bed columns tag kind = Water to signal the mesher to emit
             // a water-plane overlay at WaterLevelY; the bed itself still
             // renders with sand top + walls.

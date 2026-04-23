@@ -50,6 +50,9 @@ public sealed class TerrainChunk
     /// <summary>Mean annual rainfall in millimetres at the column surface.</summary>
     public readonly float[,] Rainfall = new float[Size, Size];
 
+    /// <summary>Biome id per tile. Look up via <c>BiomeRegistry.Get(id)</c>.</summary>
+    public readonly byte[,] Biomes = new byte[Size, Size];
+
     public int Revision { get; private set; }
 
     public void SetColumnHeight(int lx, int lz, short h)
@@ -85,6 +88,13 @@ public sealed class TerrainChunk
         if (Temperature[lx, lz] == temperatureC && Rainfall[lx, lz] == rainfallMm) return;
         Temperature[lx, lz] = temperatureC;
         Rainfall[lx, lz] = rainfallMm;
+        Revision++;
+    }
+
+    public void SetBiome(int lx, int lz, byte biomeId)
+    {
+        if (Biomes[lx, lz] == biomeId) return;
+        Biomes[lx, lz] = biomeId;
         Revision++;
     }
 }

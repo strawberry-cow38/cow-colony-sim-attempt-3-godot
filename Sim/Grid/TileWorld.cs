@@ -212,6 +212,19 @@ public sealed class TileWorld
         return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.Rainfall[lx, lz] : 0f;
     }
 
+    public void SetTerrainBiome(int x, int z, byte biomeId)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        GetOrCreateTerrainChunk(cx, cz).SetBiome(lx, lz, biomeId);
+        MutationTick++;
+    }
+
+    public byte BiomeAt(int x, int z)
+    {
+        var (cx, cz, lx, lz) = SplitXZ(x, z);
+        return _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc.Biomes[lx, lz] : (byte)0;
+    }
+
     public TerrainChunk? GetTerrainChunkOrNull(int cx, int cz)
         => _terrainChunks.TryGetValue((cx, cz), out var tc) ? tc : null;
 
