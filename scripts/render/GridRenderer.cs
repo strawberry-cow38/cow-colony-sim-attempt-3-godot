@@ -12,13 +12,10 @@ namespace CowColonySim.Render;
 
 public sealed partial class GridRenderer : Node3D
 {
-    // Euclidean (cylinder) chunk-distance cutoffs for LOD selection. Switching
-    // from chebyshev (square) to euclidean (circle) drops the four corner
-    // triangles of each ring — roughly 21% fewer chunks considered at any tier.
-    public const int Tier0Range = 2;    // L0: per-chunk voxel
-    public const int Tier1Range = 6;    // L1: per-chunk heightmap step=1
-    public const int Tier3Range = 16;   // L3: G4 group (4x4 chunks) heightmap step=4
-    // else L4: G8 group (8x8 chunks) heightmap step=32
+    // Near-camera voxel cap (chunks). Only affects L0 voxel slots today —
+    // reserved for future rocks / walls / buildings needing dense per-tile
+    // meshes up close. Heightmap terrain itself is cell-based and ignores this.
+    public const int Tier0Range = 2;
 
     private const int Group4 = 4;
     private const int Group8 = 8;
@@ -26,6 +23,13 @@ public sealed partial class GridRenderer : Node3D
     // Radial draw-distance cap (chunks). Matches G8 far edge; distance fog
     // hides the horizon so no coarser tier is needed.
     public static int MaxChunkDistance { get; set; } = 64;
+
+    // Fog saturates at the axis-edge of the populated 3×3 cell world so
+    // terrain dissolves exactly where generation stops. Camera clamp keeps
+    // the player inside the pocket (±½ cell), so this is close enough to
+    // the true far edge from any camera position to hide the seam.
+    public static float FogEndMeters =>
+        1.5f * Cell.SizeTiles * TileCoord.TileW;
 
     public static bool GpuTerrainEnabled = true;
     // Diagnostic A/B toggle for the old voxel/stepped terrain at L0+L1.
@@ -253,10 +257,12 @@ public sealed partial class GridRenderer : Node3D
                     }
                     else
                     {
+                        // Neighbor cells always render via G4 groups. G8 is
+                        // dormant — the 3×3 populated world fits inside G4's
+                        // footprint, so adding G8 on top would just Z-fight
+                        // against G4 now that the crossfade is gone.
                         var g4Key = GroupKey(ck, Group4);
-                        var g8Key = GroupKey(ck, Group8);
                         AddToBucket(g4Masks, g4Key, ck);
-                        AddToBucket(g8Masks, g8Key, ck);
                     }
                 }
             }
@@ -829,39 +835,15 @@ public sealed partial class GridRenderer : Node3D
         m.SetShaderParameter("albedo_tex", _grassTex);
         m.SetShaderParameter("patch_width_m", patchWidth);
         m.SetShaderParameter("height_scale_m", System.Math.Max(1f, maxHeightMeters));
-        // Per-tier fade bands (meters from the gimbal). Crossfade band
-        // between G4 and G8 sits at [tier3, tier3+chunk]: G4 extends 1 chunk
-        // past tier3 and fades out there; G8 starts at tier3 and fades in
-        // across the same band. Same hash on both → every pixel drawn once.
-        // G4's fade-in at [tier1-chunk, tier1] covers the L1/G4 boundary;
-        // L0/L1 don't fade (they use StandardMaterial3D, not this shader).
-        const float chunkM = Chunk.Size * TileCoord.TileW;
-        const float tier1m = Tier1Range * chunkM;
-        const float tier3m = Tier3Range * chunkM;
-        // 1 chunk G4 fade_out / G8 fade_in overlap. Residual per-pixel sky
-        // leaks where tier heights disagree are masked by a brown skybox
-        // below the horizon (see dream_sky.gdshader) rather than fixed
-        // geometrically — widening the band only smears the leaks, and
-        // recoloring the floor hides them entirely.
-        const float fadeMargin = chunkM;
-        // Hard fog-end kill: discard any fragment past fog depth-end so G8
-        // patches don't leak bright pixels through heavy fog at the horizon.
-        // Fog ramp itself comes from Godot's depth fog (FogSkyAffect=0 to
-        // keep the sky clean); see DayNightRenderer.
-        var fogEnd = MaxChunkDistance * chunkM;
-        m.SetShaderParameter("fog_end_m", fogEnd);
-        if (groupSize == Group4)
-        {
-            m.SetShaderParameter("fade_in_start_m", tier1m - fadeMargin);
-            m.SetShaderParameter("fade_in_end_m", tier1m);
-            m.SetShaderParameter("fade_out_start_m", tier3m);
-            m.SetShaderParameter("fade_out_end_m", tier3m + fadeMargin);
-        }
-        else
-        {
-            m.SetShaderParameter("fade_in_start_m", tier3m);
-            m.SetShaderParameter("fade_in_end_m", tier3m + fadeMargin);
-        }
+        // Static cell-based LOD: L1 covers the play pocket, G4 covers the 8
+        // neighbor cells, no overlap → nothing to crossfade. Leave the fade
+        // uniforms at zero (shader treats start>=end as disabled) so every
+        // fragment draws unconditionally up to the fog cap.
+        m.SetShaderParameter("fog_end_m", FogEndMeters);
+        m.SetShaderParameter("fade_in_start_m", 0f);
+        m.SetShaderParameter("fade_in_end_m", 0f);
+        m.SetShaderParameter("fade_out_start_m", 0f);
+        m.SetShaderParameter("fade_out_end_m", 0f);
         return m;
     }
 

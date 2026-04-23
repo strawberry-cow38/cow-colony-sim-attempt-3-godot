@@ -115,11 +115,12 @@ public sealed partial class DayNightRenderer : Node3D
         _sky = new ShaderMaterial { Shader = shader };
 
         var sky = new Sky { SkyMaterial = _sky, RadianceSize = Sky.RadianceSizeEnum.Size128 };
-        // Fog ramp end sourced from GridRenderer's terrain cull distance so
-        // fog saturates exactly where the farthest tier stops meshing —
-        // terrain vanishes into solid fog instead of a visible cull edge.
-        var fogEnd = GridRenderer.MaxChunkDistance * Chunk.Size * TileCoord.TileW;
-        var fogBegin = GridRenderer.Tier1Range * Chunk.Size * TileCoord.TileW;
+        // Fog saturates at the 3×3 world's far axis edge so terrain
+        // dissolves exactly where generation stops. Begin at the pocket
+        // border so inside-pocket view stays crisp and neighbor cells fade
+        // as they recede.
+        var fogEnd = GridRenderer.FogEndMeters;
+        var fogBegin = Cell.SizeTiles * TileCoord.TileW * 0.5f;
         var env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Sky,
