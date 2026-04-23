@@ -18,6 +18,7 @@ public static class BiomeBuiltins
     public const byte DesertId           = 6;
     public const byte SavannaId          = 7;
     public const byte JungleId           = 8;
+    public const byte StoneId            = 9;
 }
 
 public static class BuiltinBiomes
@@ -56,6 +57,14 @@ public static class BuiltinBiomes
     public static readonly BiomeDef Jungle =
         new(BiomeBuiltins.JungleId, "Jungle", TileKind.Floor, 0.10f, 0.45f, 0.20f);
 
+    // Stone redirects Floor → white atlas cell 9 so the gray tint multiplies
+    // against a neutral surface (cell 13 rock is orange-tinted and would
+    // muddy to a dirty tan). Slight blue bias reads as cool stone rather
+    // than warm dirt. Used by WorldGen to re-tag tall non-desert columns.
+    public static readonly BiomeDef Stone =
+        new(BiomeBuiltins.StoneId, "Stone", TileKind.Floor, 0.55f, 0.55f, 0.58f,
+            TopAtlasCellOverride: 9, SideAtlasCellOverride: 9);
+
     public static void RegisterAll()
     {
         BiomeRegistry.Register(Unknown);
@@ -67,5 +76,6 @@ public static class BuiltinBiomes
         BiomeRegistry.Register(Desert);
         BiomeRegistry.Register(Savanna);
         BiomeRegistry.Register(Jungle);
+        BiomeRegistry.Register(Stone);
     }
 }

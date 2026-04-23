@@ -123,6 +123,13 @@ public static class WorldGen
     // peaks keep their host biome instead of growing incongruous snow caps.
     public const int   SnowPeakHeightTiles = 60;
 
+    // Mountain stone override. Any tile rising more than this many tiles
+    // above sea level re-tags as Stone — gray mountain rock look, regardless
+    // of the surrounding biome. Desert cells are the exception (their
+    // mountains stay sandy). Sits well below SnowPeakHeightTiles so cold
+    // biomes still get white caps on top of stone shoulders.
+    public const int   MountainStoneHeightTiles = 18;
+
     // Per-tile rainfall boost near rivers. Stays per-tile because river
     // corridors are a local terrain feature the WorldMap knows nothing
     // about — they emerge inside the playable pocket.
@@ -391,7 +398,13 @@ public static class WorldGen
                              * RainRiverBoostMm;
             var rainMm = ownCell.RainfallMm + riverBoost;
             var biome = cellBiomeId;
-            if (height - WaterLevelY >= SnowPeakHeightTiles && allowSnowPeak)
+            // Stone override first (gray rock face), then snow wins on top
+            // of it for tall peaks in non-hot biomes. Deserts keep their
+            // sandy mountains in both passes.
+            var altitude = height - WaterLevelY;
+            if (altitude >= MountainStoneHeightTiles && cellBiomeId != BiomeBuiltins.DesertId)
+                biome = BiomeBuiltins.StoneId;
+            if (altitude >= SnowPeakHeightTiles && allowSnowPeak)
                 biome = BiomeBuiltins.SnowId;
             tiles.SetTerrainClimate(x, z, cellTempC, rainMm);
             tiles.SetTerrainBiome(x, z, biome);
