@@ -1,4 +1,5 @@
 using Godot;
+using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.Render;
@@ -73,8 +74,39 @@ public sealed partial class DayNightRenderer : Node3D
             var ambientNight = new Color(0.10f, 0.14f, 0.25f);
             env.AmbientLightColor = ambientNight.Lerp(ambientDay, daylight);
             env.AmbientLightEnergy = 0.4f + 0.6f * daylight;
+
+            // Fog = day/sunset/night phase × biome tint. Phase color tracks
+            // horizon palette so fog and sky meet at the same band; biome
+            // tint gives deserts a dusty warm haze, jungles a humid green,
+            // plains read neutral. Tint multiplies onto phase so night still
+            // dominates (desert night stays dark, not dusty orange).
+            var fogDay = new Color(0.75f, 0.80f, 0.85f);
+            var fogSunset = new Color(1.00f, 0.62f, 0.38f);
+            var fogNight = new Color(0.08f, 0.10f, 0.18f);
+            var fogPhase = fogDay.Lerp(fogSunset, sunsetAmount).Lerp(fogNight, nightAmount);
+
+            var tint = BiomeFogTint(_sim.Overworld.Get(_sim.CurrentMapCoord).BiomeId);
+            env.FogLightColor = new Color(
+                fogPhase.R * tint.R,
+                fogPhase.G * tint.G,
+                fogPhase.B * tint.B,
+                1f);
+            env.FogLightEnergy = 0.7f + 0.3f * daylight;
         }
     }
+
+    private static Color BiomeFogTint(byte biomeId) => biomeId switch
+    {
+        BiomeBuiltins.DesertId          => new Color(1.20f, 1.05f, 0.78f),
+        BiomeBuiltins.SavannaId         => new Color(1.12f, 1.02f, 0.82f),
+        BiomeBuiltins.JungleId          => new Color(0.82f, 1.02f, 0.88f),
+        BiomeBuiltins.TemperateForestId => new Color(0.92f, 1.00f, 0.95f),
+        BiomeBuiltins.TaigaId           => new Color(0.92f, 0.98f, 1.02f),
+        BiomeBuiltins.TundraId          => new Color(0.96f, 0.99f, 1.04f),
+        BiomeBuiltins.SnowId            => new Color(0.98f, 1.00f, 1.06f),
+        BiomeBuiltins.StoneId           => new Color(0.95f, 0.95f, 0.98f),
+        _                               => new Color(1.00f, 1.00f, 1.00f),
+    };
 
     private void BuildEnvironment()
     {

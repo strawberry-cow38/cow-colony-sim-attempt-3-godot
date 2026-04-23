@@ -16,14 +16,6 @@ uniform float moon_energy = 2.0;
 uniform vec3 moon_color : source_color = vec3(0.85, 0.90, 1.0);
 uniform float night_amount = 0.0;
 uniform float sunset_amount = 0.0;
-uniform float ground_darken = 0.4;
-// Below-horizon plate color. Tuned to the midpoint of fog-blanketed dirt so
-// the plate reads as far-distance ground rather than a hard brown swatch —
-// fog (bluish grey) already tints fragments at distance, so pure saturated
-// brown here stands out as an obvious different layer. Warm muted grey-
-// brown blends instead, masking residual LOD dither leaks without selling
-// the cheat.
-uniform vec3 ground_color : source_color = vec3(0.55, 0.50, 0.45);
 
 float hash21(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -61,12 +53,13 @@ void sky() {
     // Ground plate bleeds slightly above the true horizon (up=0) so that
     // narrow sky strips between distant terrain tiers and the plate are
     // covered by the plate color instead of showing pale horizon blue.
-    // Fog already tints that band a greyed-out color, so pushing the plate
-    // up 2–3 degrees makes tier-disagreement voids read as fogged ground
-    // rather than a visible sky slit.
+    // Plate color = mid-sky band (horizon blended toward zenith) so the
+    // seam to fogged ground reads as continuous sky instead of a hard
+    // brown swatch. Tracks day/sunset/night automatically via horizon/zenith.
     float ground_blend = 1.0 - smoothstep(0.0, 0.05, up);
     vec3 sky_above = mix(horizon, zenith, pow(up01, 0.55));
-    vec3 sky_col = mix(sky_above, ground_color, ground_blend);
+    vec3 ground_col = mix(horizon, zenith, 0.25);
+    vec3 sky_col = mix(sky_above, ground_col, ground_blend);
 
     float sun_d = max(dot(dir, normalize(sun_dir)), 0.0);
     vec3 sun = pow(sun_d, sun_sharpness) * sun_color * sun_energy * (1.0 - night_amount);
