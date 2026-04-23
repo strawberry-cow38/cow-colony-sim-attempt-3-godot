@@ -42,9 +42,10 @@ public class ClimateTests
     [Fact]
     public void SnowBiome_AppearsOnTallPeaks()
     {
-        // Climate is one-biome-per-cell, but tiles rising above
-        // SnowPeakHeightTiles re-tag as Snow regardless of their cell's
-        // biome — so every tall peak in any biome should come back Snow.
+        // Tiles rising SnowPeakHeightTiles above sea level re-tag as Snow,
+        // except inside Savanna/Desert cells where the hot biome wins. So
+        // every tall peak should come back either Snow or the host cell's
+        // hot-band biome — never anything else.
         var tiles = new TileWorld();
         WorldGen.Generate(tiles, seed: 42, sizeX: 256, sizeZ: 256);
 
@@ -55,7 +56,12 @@ public class ClimateTests
             var h = tiles.TerrainHeightAt(x, z);
             if (h - WorldGen.WaterLevelY < WorldGen.SnowPeakHeightTiles) continue;
             sawPeak = true;
-            Assert.Equal(BiomeBuiltins.SnowId, tiles.BiomeAt(x, z));
+            var b = tiles.BiomeAt(x, z);
+            Assert.True(
+                b == BiomeBuiltins.SnowId
+                || b == BiomeBuiltins.SavannaId
+                || b == BiomeBuiltins.DesertId,
+                $"peak at ({x},{z}) h={h} came back biome {b}");
         }
         if (!sawPeak) return; // seed produced no tall peak — skip
     }

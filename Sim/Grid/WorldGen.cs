@@ -106,10 +106,18 @@ public static class WorldGen
     public const float TempNoiseAmpC  = 4f;
 
     // Snow cap override. Cells are one-biome-each, but any tile rising more
-    // than this many tiles above sea level re-tags as Snow regardless of
-    // its cell's biome — gives mountains white peaks inside e.g. a jungle
-    // or savanna cell without splitting the cell into sub-biomes.
+    // than this many tiles above sea level re-tags as Snow — gives mountains
+    // white peaks inside e.g. a jungle or grassland cell without splitting
+    // the cell into sub-biomes. Explicitly skipped for Savanna and Desert
+    // cells so hot-band peaks keep their host biome instead of growing
+    // incongruous snow caps.
     public const int   SnowPeakHeightTiles = 60;
+
+    // Mixed-biome transition band. Tiles within this many tiles of a cell
+    // border whose neighbor cell's biome differs are tagged Mixed instead
+    // of the cell biome — softens the otherwise-hard biome seams produced
+    // by one-biome-per-cell sampling.
+    public const int   MixedBandTiles      = 24;
 
     public const float RainMinMm      = 0f;
     public const float RainMaxMm      = 2500f;
@@ -308,17 +316,35 @@ public static class WorldGen
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            // One climate + biome per cell. Snow-peak override promotes any
-            // tile rising SnowPeakHeightTiles above sea level to Snow so
-            // tall mountains keep their white caps regardless of the host
-            // cell's biome.
-            var cxi = FloorDiv(x, Cell.SizeTiles) - firstCellX;
-            var czi = FloorDiv(z, Cell.SizeTiles) - firstCellZ;
+            // One climate + biome per cell, then two overrides:
+            //   (a) tall peaks re-tag as Snow — except inside Savanna or
+            //       Desert cells where snow caps would read as incongruous
+            //       in a hot biome
+            //   (b) tiles near a cell border whose neighbor has a different
+            //       biome re-tag as Mixed to soften the blocky seams
+            // Snow-peak takes priority over Mixed so dominant peaks still
+            // read as snow even when they sit in a border band.
+            var cellXIdx = FloorDiv(x, Cell.SizeTiles);
+            var cellZIdx = FloorDiv(z, Cell.SizeTiles);
+            var cxi = cellXIdx - firstCellX;
+            var czi = cellZIdx - firstCellZ;
             var tempC  = cellTemp[cxi, czi];
             var rainMm = cellRain[cxi, czi];
-            var biome  = cellBiome[cxi, czi];
-            if (height - WaterLevelY >= SnowPeakHeightTiles)
+            var cellB  = cellBiome[cxi, czi];
+            var biome  = cellB;
+            var allowSnowPeak = cellB != BiomeBuiltins.SavannaId
+                             && cellB != BiomeBuiltins.DesertId;
+            if (height - WaterLevelY >= SnowPeakHeightTiles && allowSnowPeak)
+            {
                 biome = BiomeBuiltins.SnowId;
+            }
+            else
+            {
+                var lx = x - cellXIdx * Cell.SizeTiles;
+                var lz = z - cellZIdx * Cell.SizeTiles;
+                if (IsNearDifferentBiomeBorder(cxi, czi, lx, lz, cellB, cellBiome, cellsX, cellsZ))
+                    biome = BiomeBuiltins.MixedId;
+            }
             tiles.SetTerrainClimate(x, z, tempC, rainMm);
             tiles.SetTerrainBiome(x, z, biome);
             // Lake-bed columns tag kind = Water to signal the mesher to emit
@@ -764,6 +790,28 @@ public static class WorldGen
     }
 
     private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);
+
+    // True when the tile sits within MixedBandTiles of a cell-border that
+    // separates it from a neighbor cell of a different biome. 4-neighbor
+    // only (N/S/E/W); diagonals are skipped — the 4-neighbor check already
+    // covers every border that matters and corner seams are thin enough
+    // that the extra bookkeeping isn't worth it.
+    private static bool IsNearDifferentBiomeBorder(
+        int cxi, int czi, int lx, int lz,
+        byte cellB, byte[,] cellBiome, int cellsX, int cellsZ)
+    {
+        const int Band = MixedBandTiles;
+        var lastLocal = Cell.SizeTiles - 1;
+        if (lx < Band && cxi > 0
+            && cellBiome[cxi - 1, czi] != cellB) return true;
+        if (lastLocal - lx < Band && cxi < cellsX - 1
+            && cellBiome[cxi + 1, czi] != cellB) return true;
+        if (lz < Band && czi > 0
+            && cellBiome[cxi, czi - 1] != cellB) return true;
+        if (lastLocal - lz < Band && czi < cellsZ - 1
+            && cellBiome[cxi, czi + 1] != cellB) return true;
+        return false;
+    }
 
     private static float Smoothstep(float edge0, float edge1, float x)
     {

@@ -15,7 +15,11 @@ namespace CowColonySim;
 
 public partial class SimHost : Node
 {
-	public const int WorldSize = 1600;
+	// 12 cells × 256 tiles = 3072 tiles = ~4.6 km span. Centered on origin
+	// so cells span [-6..5] on each axis, 12 fully contained cells + 0
+	// partial ones. Runtime stays flat (sim walks LIVE/AMBIENT only, draw
+	// caps at MaxChunkDistance); worldgen + RAM scale linearly with tiles.
+	public const int WorldSize = 3072;
 	public const int ColonyClaimRadius = 24;
 	public const int WorldSeed = 0xC0FFEE;
 

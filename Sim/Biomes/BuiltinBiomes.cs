@@ -18,6 +18,10 @@ public static class BiomeBuiltins
     public const byte DesertId           = 6;
     public const byte SavannaId          = 7;
     public const byte JungleId           = 8;
+    // Transition biome — stamped on tiles within MixedBandTiles of a cell
+    // border whose neighbor cell's biome differs. Softens the blocky
+    // one-biome-per-cell look at biome seams.
+    public const byte MixedId            = 9;
 }
 
 public static class BuiltinBiomes
@@ -56,6 +60,12 @@ public static class BuiltinBiomes
     public static readonly BiomeDef Jungle =
         new(BiomeBuiltins.JungleId, "Jungle", TileKind.Floor, 0.10f, 0.45f, 0.20f);
 
+    // Transition tint — muted olive that sits between common neighbor
+    // pairs (grassland/forest/savanna) without clashing. No atlas override
+    // so the tile keeps its surface-kind texture and only the tint shifts.
+    public static readonly BiomeDef Mixed =
+        new(BiomeBuiltins.MixedId, "Mixed", TileKind.Floor, 0.55f, 0.65f, 0.40f);
+
     public static void RegisterAll()
     {
         BiomeRegistry.Register(Unknown);
@@ -67,5 +77,6 @@ public static class BuiltinBiomes
         BiomeRegistry.Register(Desert);
         BiomeRegistry.Register(Savanna);
         BiomeRegistry.Register(Jungle);
+        BiomeRegistry.Register(Mixed);
     }
 }
