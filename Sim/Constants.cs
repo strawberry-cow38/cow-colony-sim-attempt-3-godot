@@ -27,8 +27,8 @@ public static class SimConstants
 
     // Cells group chunks for streaming / tier gating. A cell is a square
     // (X/Z) slab of CellSizeChunks × CellSizeChunks chunks, spanning the
-    // full vertical extent. 32 chunks = 512 tiles = 768m per side.
-    public const int CellSizeChunks = 32;
+    // full vertical extent. 16 chunks = 256 tiles = 384m per side.
+    public const int CellSizeChunks = 16;
     public const int CellSizeTiles = CellSizeChunks * ChunkSize;
 
     // Cells within this many cells of a Live cell stay at least Ambient.
