@@ -69,6 +69,10 @@ public sealed partial class GridRenderer : Node3D
     private MeshInstance3D? _oceanQuad;
     private Shader? _terrainShader;
     private Texture2D? _grassTex;
+    // Per-biome debug color palette (256×1 RGB8). Built once after biome
+    // registry is populated, shared across every G4/G8 material so far
+    // terrain tints match the near-tier mesher's ApplyBiomeTint path.
+    private ImageTexture? _biomePaletteTex;
     private ArrayMesh? _g4PatchMesh;
     private ArrayMesh? _g8PatchMesh;
     private const int G4CellsPerSide = 16;  // 6m per cell at 96m patch (matches CPU step=4)
@@ -135,6 +139,10 @@ public sealed partial class GridRenderer : Node3D
         if (GpuTerrainEnabled)
         {
             _terrainShader = GD.Load<Shader>("res://scripts/render/shaders/terrain_heightmap.gdshader");
+            // Biome registry is populated by SimHost before we run (_Ready
+            // ordering). Build the palette once so every material shares one
+            // texture handle instead of re-uploading 768 bytes per patch.
+            _biomePaletteTex = GpuTerrain.BuildBiomePaletteTexture();
             var g8Width  = Group8  * Chunk.Size * TileCoord.TileW;
             var g4Width  = Group4  * Chunk.Size * TileCoord.TileW;
             // Corner-heightmap stepped patch: 4 top verts per cell each
@@ -412,8 +420,10 @@ public sealed partial class GridRenderer : Node3D
                     patch.Corners, patch.CornersSize, patch.CornersSize, patch.MaxHeightMeters);
                 var kindTex = GpuTerrain.BuildKindmapTexture(
                     patch.Kinds, patch.KindsSize, patch.KindsSize);
+                var biomeTex = GpuTerrain.BuildBiomemapTexture(
+                    patch.Biomes, patch.KindsSize, patch.KindsSize);
                 slot.MeshInstance.Mesh = groupSize == Group4 ? _g4PatchMesh : _g8PatchMesh;
-                slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex, kindTex);
+                slot.MeshInstance.MaterialOverride = BuildTerrainMaterial(groupSize, patch.MaxHeightMeters, tex, kindTex, biomeTex);
             }
             slot.UploadedRevision = slot.RequestedRevision;
             slot.UploadedMaskHash = maskHash;
@@ -831,12 +841,14 @@ public sealed partial class GridRenderer : Node3D
         };
     }
 
-    private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap, ImageTexture kindmap)
+    private ShaderMaterial BuildTerrainMaterial(int groupSize, float maxHeightMeters, ImageTexture heightmap, ImageTexture kindmap, ImageTexture biomemap)
     {
         var patchWidth = groupSize * Chunk.Size * TileCoord.TileW;
         var m = new ShaderMaterial { Shader = _terrainShader };
         m.SetShaderParameter("heightmap", heightmap);
         m.SetShaderParameter("kindmap", kindmap);
+        m.SetShaderParameter("biomemap", biomemap);
+        m.SetShaderParameter("biome_palette", _biomePaletteTex);
         m.SetShaderParameter("albedo_tex", _grassTex);
         m.SetShaderParameter("patch_width_m", patchWidth);
         m.SetShaderParameter("height_scale_m", System.Math.Max(1f, maxHeightMeters));

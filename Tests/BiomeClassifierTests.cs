@@ -13,7 +13,8 @@ public class BiomeClassifierTests
     [InlineData(10f,  200f,  BiomeBuiltins.GrasslandId)]
     [InlineData(10f,  1200f, BiomeBuiltins.TemperateForestId)]
     [InlineData(28f,  100f,  BiomeBuiltins.DesertId)]
-    [InlineData(28f,  900f,  BiomeBuiltins.SavannaId)]
+    [InlineData(28f,  850f,  BiomeBuiltins.DesertId)]
+    [InlineData(28f,  1200f, BiomeBuiltins.SavannaId)]
     [InlineData(28f,  2000f, BiomeBuiltins.JungleId)]
     public void Classifies_ExpectedBand(float tempC, float rainMm, byte expected)
     {

@@ -1,4 +1,5 @@
 using Godot;
+using CowColonySim.Sim.Biomes;
 using GArray = Godot.Collections.Array;
 
 namespace CowColonySim.Render;
@@ -329,6 +330,52 @@ public static class GpuTerrain
         for (var x = 0; x < sizeX; x++)
             buf[z * sizeX + x] = kinds[x, z];
         var img = Image.CreateFromData(sizeX, sizeZ, false, Image.Format.R8, buf);
+        return ImageTexture.CreateFromImage(img);
+    }
+
+    /// <summary>
+    /// Per-cell biome id map. Same layout as the kindmap (R8, 1px border) so
+    /// the shader can sample it with the same UV2 the kind branch already
+    /// uses. Separate sampler from kindmap because biome id and tile kind are
+    /// independent axes (a Floor tile can belong to any biome).
+    /// </summary>
+    public static ImageTexture BuildBiomemapTexture(byte[,] biomes, int sizeX, int sizeZ)
+    {
+        var buf = new byte[sizeX * sizeZ];
+        for (var z = 0; z < sizeZ; z++)
+        for (var x = 0; x < sizeX; x++)
+            buf[z * sizeX + x] = biomes[x, z];
+        var img = Image.CreateFromData(sizeX, sizeZ, false, Image.Format.R8, buf);
+        return ImageTexture.CreateFromImage(img);
+    }
+
+    /// <summary>
+    /// 256×1 RGB8 palette indexed by biome id. Shader samples with
+    /// <c>texture(biome_palette, vec2((biome_byte+0.5)/256, 0.5))</c>. Built
+    /// from <see cref="BiomeRegistry"/> so adding a biome via the registry
+    /// automatically shows up in LOD tiers without extra renderer code.
+    /// </summary>
+    public static ImageTexture BuildBiomePaletteTexture()
+    {
+        var buf = new byte[256 * 3];
+        // Default all 256 slots to white so unknown / unregistered biome bytes
+        // sample a neutral tint rather than black (which would multiply the
+        // atlas sample to 0 and leave visible dead spots at tier seams).
+        for (var i = 0; i < 256; i++)
+        {
+            buf[i * 3 + 0] = 255;
+            buf[i * 3 + 1] = 255;
+            buf[i * 3 + 2] = 255;
+        }
+        foreach (var def in BiomeRegistry.All)
+        {
+            if (def == null) continue;
+            var i = def.Id * 3;
+            buf[i + 0] = (byte)Mathf.Clamp((int)(def.DebugR * 255f), 0, 255);
+            buf[i + 1] = (byte)Mathf.Clamp((int)(def.DebugG * 255f), 0, 255);
+            buf[i + 2] = (byte)Mathf.Clamp((int)(def.DebugB * 255f), 0, 255);
+        }
+        var img = Image.CreateFromData(256, 1, false, Image.Format.Rgb8, buf);
         return ImageTexture.CreateFromImage(img);
     }
 }

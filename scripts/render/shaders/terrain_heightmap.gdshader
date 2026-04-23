@@ -29,6 +29,13 @@ uniform sampler2D heightmap : hint_default_black, filter_nearest, repeat_disable
 // value is an enum — linear interpolation at cell borders would dream up
 // nonexistent kinds. 1=Solid, 2=Floor(grass), 3=Water, 4=Sand.
 uniform sampler2D kindmap : hint_default_black, filter_nearest, repeat_disable;
+// Per-cell biome id (see Sim/Biomes/BiomeBuiltins.cs). Same layout / UV as
+// kindmap — the two axes are independent (a Floor tile can be any biome).
+// Nearest filter: enum values, no interpolation.
+uniform sampler2D biomemap : hint_default_black, filter_nearest, repeat_disable;
+// 256×1 RGB palette keyed by biome byte. Sampled with
+// (biome_byte+0.5)/256 so filter_nearest can sit on the pixel center.
+uniform sampler2D biome_palette : filter_nearest, repeat_disable;
 uniform sampler2D albedo_tex : filter_linear_mipmap_anisotropic, repeat_enable;
 // Water tops sit half a tile below the raw column ceiling so shores read
 // as a step above the waterline. Matches the L0 / L1 mesher offset.
@@ -74,6 +81,16 @@ float sample_height(vec2 uv_local) {
 float sample_kind(vec2 kind_uv) {
 	// kindmap is R8 unorm storing TileKind byte; decode back to [0..255].
 	return texture(kindmap, kind_uv).r * 255.0;
+}
+
+float sample_biome(vec2 kind_uv) {
+	// biomemap shares kindmap's UV. R8 unorm back to [0..255].
+	return texture(biomemap, kind_uv).r * 255.0;
+}
+
+vec3 sample_biome_tint(float biome_byte) {
+	float u = (biome_byte + 0.5) / 256.0;
+	return texture(biome_palette, vec2(u, 0.5)).rgb;
 }
 
 // Interleaved Gradient Noise (Jimenez). Approximates blue-noise spectrum from
@@ -143,12 +160,14 @@ void fragment() {
 	vec3 wdy = dFdy(v_local_pos);
 	vec3 world_n = normalize(cross(wdy, wdx));
 
-	// Atlas: grass cell at (col=0,row=0), dirt cell 10 at (col=2,row=2),
-	// sand cell 15 at (col=3,row=3). See TileAtlas.cs. Each cell is
-	// 0.25×0.25 of the atlas; inset trims mipmap bleed from neighbours.
+	// Atlas: grass cell at (col=0,row=0), white cell 9 at (col=1,row=2),
+	// dirt cell 10 at (col=2,row=2), sand cell 15 at (col=3,row=3). See
+	// TileAtlas.cs. Each cell is 0.25×0.25 of the atlas; inset trims mipmap
+	// bleed from neighbours.
 	const float inset = 8.0 / 2048.0;
 	const float cell_span = 0.25 - 2.0 * inset;
 	const vec2 grass_origin = vec2(inset);
+	const vec2 white_origin = vec2(0.25 + inset, 0.5 + inset);
 	const vec2 dirt_origin = vec2(0.5 + inset, 0.5 + inset);
 	const vec2 sand_origin = vec2(0.75 + inset, 0.75 + inset);
 
@@ -159,8 +178,21 @@ void fragment() {
 	bool is_water = kind_byte > 2.5 && kind_byte < 3.5;
 	bool is_sand  = kind_byte > 3.5 && kind_byte < 4.5;
 
-	// Top sample: grass by default; sand on beach columns.
+	// Biome byte drives atlas-cell overrides (Snow → white, Desert → sand)
+	// and a per-fragment palette tint. Ids here must match
+	// Sim/Biomes/BiomeBuiltins.cs.
+	float biome_byte = sample_biome(v_kind_uv);
+	bool is_snow_biome   = biome_byte > 0.5 && biome_byte < 1.5;
+	bool is_desert_biome = biome_byte > 5.5 && biome_byte < 6.5;
+	bool can_override = !is_water;
+	vec3 biome_tint = sample_biome_tint(biome_byte);
+
+	// Top sample: grass by default; sand on beach columns; biome override
+	// swaps Floor columns to neutral cells so the tint doesn't multiply a
+	// green grass texel.
 	vec2 top_origin = is_sand ? sand_origin : grass_origin;
+	if (can_override && is_snow_biome)   top_origin = white_origin;
+	if (can_override && is_desert_biome) top_origin = sand_origin;
 	vec2 top_uv = top_origin + fract(UV) * cell_span;
 	vec2 top_du = dFdx(UV) * cell_span;
 	vec2 top_dv = dFdy(UV) * cell_span;
@@ -170,6 +202,8 @@ void fragment() {
 	// Compute both projections unconditionally so derivatives stay clean at
 	// face boundaries where fragment groups might straddle both.
 	vec2 side_origin = is_sand ? sand_origin : dirt_origin;
+	if (can_override && is_snow_biome)   side_origin = white_origin;
+	if (can_override && is_desert_biome) side_origin = sand_origin;
 	vec2 wall_x_scaled = vec2(v_local_pos.x, v_local_pos.y) * (1.0 / 1.5);
 	vec2 wall_z_scaled = vec2(v_local_pos.z, v_local_pos.y) * (1.0 / 1.5);
 	vec2 side_uv_x = side_origin + fract(wall_x_scaled) * cell_span;
@@ -186,10 +220,16 @@ void fragment() {
 	vec4 tex = mix(side, top_tex, top_factor);
 
 	vec3 albedo = tex.rgb;
+	// Biome tint multiplied on top of the atlas sample — matches the
+	// CPU-side HeightmapTerrainMesher.ApplyBiomeTint path used for the near
+	// tier, so tier seams aren't color-discontinuities.
+	albedo *= biome_tint;
 	float roughness = 0.95;
 	if (is_water) {
 		// Water cells skip atlas sampling entirely — solid tint matches the
 		// L0/L1 water material which rides cell 9 (white) × TintFor(Water).
+		// Skip biome multiply so lakes don't shift color with surrounding
+		// biome.
 		albedo = water_tint;
 		roughness = 0.4;
 	}

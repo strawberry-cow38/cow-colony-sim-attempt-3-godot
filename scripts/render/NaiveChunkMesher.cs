@@ -259,6 +259,10 @@ public sealed class NaiveChunkMesher : IChunkMesher
         // Per-cell kind with 1px border, width = cellsPerSide + 2. Own cell
         // (cx,cz).Kind -> Kinds[cx+1, cz+1].
         public byte[,] Kinds = null!;
+        // Per-cell biome id with the same 1px-border layout as Kinds. Shader
+        // samples this to apply a per-biome tint and swap atlas cells for
+        // snow / desert so distant terrain matches the near-tier look.
+        public byte[,] Biomes = null!;
         public int CornersSize;
         public int KindsSize;
         public int Revision;
@@ -307,10 +311,21 @@ public sealed class NaiveChunkMesher : IChunkMesher
             return snap.Kinds[lx, lz];
         }
 
+        byte ReadBiome(int tx, int tz)
+        {
+            var chunkLx = FloorDiv(tx, s);
+            var chunkLz = FloorDiv(tz, s);
+            var lx = tx - chunkLx * s;
+            var lz = tz - chunkLz * s;
+            if (!byLxLz.TryGetValue((chunkLx, chunkLz), out var snap)) return 0;
+            return snap.Biomes[lx, lz];
+        }
+
         var cornersSize = cellsPerSide * 2 + 2;
         var kindsSize = cellsPerSide + 2;
         var corners = new float[cornersSize, cornersSize];
         var kinds = new byte[kindsSize, kindsSize];
+        var biomes = new byte[kindsSize, kindsSize];
         var any = false;
         var maxH = 0f;
 
@@ -335,6 +350,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
             WriteCorner(2 * cx + 1, 2 * cz + 2, ReadCornerM(txMin, tzMax, TerrainChunk.NW, kind));
             WriteCorner(2 * cx + 2, 2 * cz + 2, ReadCornerM(txMax, tzMax, TerrainChunk.NE, kind));
             kinds[cx + 1, cz + 1] = kind;
+            biomes[cx + 1, cz + 1] = ReadBiome(txMin + step / 2, tzMin + step / 2);
         }
 
         if (!any) return null;
@@ -355,6 +371,12 @@ public sealed class NaiveChunkMesher : IChunkMesher
             if (kindR == 0) kindR = kinds[cellsPerSide, cz + 1];
             kinds[0, cz + 1] = kindL;
             kinds[kindsSize - 1, cz + 1] = kindR;
+            var biomeL = ReadBiome(-1, tzMin + step / 2);
+            var biomeR = ReadBiome(sizeTiles, tzMin + step / 2);
+            if (biomeL == 0) biomeL = biomes[1, cz + 1];
+            if (biomeR == 0) biomeR = biomes[cellsPerSide, cz + 1];
+            biomes[0, cz + 1] = biomeL;
+            biomes[kindsSize - 1, cz + 1] = biomeR;
         }
 
         // -Z border row (z=0): -Z neighbor's topmost cell NW/NE.
@@ -373,6 +395,12 @@ public sealed class NaiveChunkMesher : IChunkMesher
             if (kindN == 0) kindN = kinds[cx + 1, cellsPerSide];
             kinds[cx + 1, 0] = kindS;
             kinds[cx + 1, kindsSize - 1] = kindN;
+            var biomeS = ReadBiome(txMin + step / 2, -1);
+            var biomeN = ReadBiome(txMin + step / 2, sizeTiles);
+            if (biomeS == 0) biomeS = biomes[cx + 1, 1];
+            if (biomeN == 0) biomeN = biomes[cx + 1, cellsPerSide];
+            biomes[cx + 1, 0] = biomeS;
+            biomes[cx + 1, kindsSize - 1] = biomeN;
         }
 
         // Border fallback for cells with no neighbor data: replicate nearest
@@ -392,6 +420,7 @@ public sealed class NaiveChunkMesher : IChunkMesher
         {
             Corners = corners,
             Kinds = kinds,
+            Biomes = biomes,
             CornersSize = cornersSize,
             KindsSize = kindsSize,
             Revision = revSum,

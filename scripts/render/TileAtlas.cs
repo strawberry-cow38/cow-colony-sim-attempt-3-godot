@@ -56,6 +56,22 @@ public static class TileAtlas
         };
     }
 
+    // Biome override wrappers: a biome (Snow, Desert, ...) can redirect Floor
+    // rendering to a neutral atlas cell so the biome tint doesn't multiply
+    // against green grass. Water always keeps its own white-cell overlay so
+    // lakes stay blue regardless of surrounding biome.
+    public static int ResolveTopCell(int overrideCell, TileKind kind, int wx, int wz)
+    {
+        if (overrideCell >= 0 && kind != TileKind.Water) return overrideCell;
+        return CellForTop(kind, wx, wz);
+    }
+
+    public static int ResolveSideCell(int overrideCell, TileKind kind)
+    {
+        if (overrideCell >= 0 && kind != TileKind.Water) return overrideCell;
+        return CellForSide(kind);
+    }
+
     // Vertex-color tint multiplied with the albedo texture (material has
     // vertex_color_use_as_albedo=true). Water rides on the white atlas
     // cell so the multiply lands on a clean blue. Alpha < 1 → translucent

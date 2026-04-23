@@ -25,8 +25,12 @@ public static class BuiltinBiomes
     public static readonly BiomeDef Unknown =
         new(BiomeBuiltins.UnknownId, "Unknown", TileKind.Floor, 1f, 0f, 1f);
 
+    // Snow redirects Floor → white atlas cell 9 so the snow tint isn't
+    // multiplied against green grass. Side walls also use white for a
+    // continuous snow-cliff look.
     public static readonly BiomeDef Snow =
-        new(BiomeBuiltins.SnowId, "Snow", TileKind.Floor, 0.95f, 0.98f, 1.00f);
+        new(BiomeBuiltins.SnowId, "Snow", TileKind.Floor, 0.95f, 0.98f, 1.00f,
+            TopAtlasCellOverride: 9, SideAtlasCellOverride: 9);
 
     public static readonly BiomeDef Tundra =
         new(BiomeBuiltins.TundraId, "Tundra", TileKind.Floor, 0.72f, 0.78f, 0.70f);
@@ -40,8 +44,11 @@ public static class BuiltinBiomes
     public static readonly BiomeDef TemperateForest =
         new(BiomeBuiltins.TemperateForestId, "Temperate Forest", TileKind.Floor, 0.20f, 0.55f, 0.25f);
 
+    // Desert redirects Floor → sand atlas cell 15 so grass tiles inside the
+    // desert band read as sand rather than tinted-yellow grass.
     public static readonly BiomeDef Desert =
-        new(BiomeBuiltins.DesertId, "Desert", TileKind.Sand, 0.95f, 0.85f, 0.55f);
+        new(BiomeBuiltins.DesertId, "Desert", TileKind.Sand, 0.95f, 0.85f, 0.55f,
+            TopAtlasCellOverride: 15, SideAtlasCellOverride: 15);
 
     public static readonly BiomeDef Savanna =
         new(BiomeBuiltins.SavannaId, "Savanna", TileKind.Floor, 0.85f, 0.75f, 0.35f);

@@ -83,9 +83,10 @@ public sealed class HeightmapTerrainMesher
 
             var wx = snap.ChunkX * s + lx;
             var wz = snap.ChunkZ * s + lz;
-            var cell = TileAtlas.CellForTop(topKind, wx, wz);
-            var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
             var biomeId = snap.Biomes[lx, lz];
+            var biomeDef = BiomeRegistry.Get(biomeId);
+            var cell = TileAtlas.ResolveTopCell(biomeDef.TopAtlasCellOverride, topKind, wx, wz);
+            var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
             var tint = ApplyBiomeTint(TileAtlas.TintFor(topKind), biomeId);
 
             var vi = verts.Count;
@@ -273,7 +274,8 @@ public sealed class HeightmapTerrainMesher
         Vector3 bl, Vector3 tl, Vector3 tr, Vector3 br,
         Vector3 normal, TileKind kind, byte biomeId)
     {
-        var cell = TileAtlas.CellForSide(kind);
+        var biomeDef = BiomeRegistry.Get(biomeId);
+        var cell = TileAtlas.ResolveSideCell(biomeDef.SideAtlasCellOverride, kind);
         var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
         var tint = ApplyBiomeTint(TileAtlas.TintFor(kind), biomeId);
 

@@ -24,10 +24,12 @@ public static class BiomeClassifier
         (2f,   18f, 0f,    500f,            BiomeBuiltins.GrasslandId),
         (2f,   18f, 500f,  float.MaxValue,  BiomeBuiltins.TemperateForestId),
 
-        // Hot band — desert dry, savanna mid, jungle wet.
-        (18f,  float.MaxValue, 0f,    350f,           BiomeBuiltins.DesertId),
-        (18f,  float.MaxValue, 350f,  1500f,          BiomeBuiltins.SavannaId),
-        (18f,  float.MaxValue, 1500f, float.MaxValue, BiomeBuiltins.JungleId),
+        // Hot band — desert dry, savanna mid, jungle wet. Desert widened and
+        // savanna narrowed on purpose so hot regions read mostly as desert
+        // (most non-tropical rain totals in the hot band fall under ~900mm).
+        (18f,  float.MaxValue, 0f,    900f,           BiomeBuiltins.DesertId),
+        (18f,  float.MaxValue, 900f,  1600f,          BiomeBuiltins.SavannaId),
+        (18f,  float.MaxValue, 1600f, float.MaxValue, BiomeBuiltins.JungleId),
     };
 
     public static byte Pick(float tempC, float rainMm)
