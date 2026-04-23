@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Godot;
 using CowColonySim.Sim;
+using CowColonySim.Sim.Biomes;
 using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.Render;
@@ -84,7 +85,8 @@ public sealed class HeightmapTerrainMesher
             var wz = snap.ChunkZ * s + lz;
             var cell = TileAtlas.CellForTop(topKind, wx, wz);
             var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-            var tint = TileAtlas.TintFor(topKind);
+            var biomeId = snap.Biomes[lx, lz];
+            var tint = ApplyBiomeTint(TileAtlas.TintFor(topKind), biomeId);
 
             var vi = verts.Count;
             var pSW = new Vector3(x0, ySW, z0);
@@ -134,7 +136,7 @@ public sealed class HeightmapTerrainMesher
                 botA: new Vector3(x1, eSW * th, z0),
                 botB: new Vector3(x1, eNW * th, z1),
                 faceDirPlus: new Vector3(1f, 0f, 0f),
-                topKind);
+                topKind, biomeId);
 
             short nSW, nSE;
             if (lz + 1 < s)
@@ -154,7 +156,7 @@ public sealed class HeightmapTerrainMesher
                 botA: new Vector3(x1, nSE * th, z1),
                 botB: new Vector3(x0, nSW * th, z1),
                 faceDirPlus: new Vector3(0f, 0f, 1f),
-                topKind);
+                topKind, biomeId);
 
             if (isWater)
             {
@@ -188,11 +190,21 @@ public sealed class HeightmapTerrainMesher
     // "top" is actually lower than "bot" (neighbor higher than self), swaps
     // roles and flips the face normal so the outward side still points away
     // from the taller tile.
+    private static Color ApplyBiomeTint(Color baseTint, byte biomeId)
+    {
+        var def = BiomeRegistry.Get(biomeId);
+        return new Color(
+            baseTint.R * def.DebugR,
+            baseTint.G * def.DebugG,
+            baseTint.B * def.DebugB,
+            baseTint.A);
+    }
+
     private static void EmitWallIfGap(
         List<Vector3> verts, List<Vector3> normals, List<Color> colors,
         List<Vector2> uvs, List<int> indices,
         Vector3 topA, Vector3 topB, Vector3 botA, Vector3 botB,
-        Vector3 faceDirPlus, TileKind kind)
+        Vector3 faceDirPlus, TileKind kind, byte biomeId)
     {
         var selfUpperA = topA.Y > botA.Y;
         var selfUpperB = topB.Y > botB.Y;
@@ -207,7 +219,7 @@ public sealed class HeightmapTerrainMesher
             // matches the supplied normal under Godot's front-face rule.
             EmitCliffQuad(verts, normals, colors, uvs, indices,
                 bl: botB, tl: topB, tr: topA, br: botA,
-                normal: faceDirPlus, kind);
+                normal: faceDirPlus, kind, biomeId);
         }
         else if ((selfLowerA || selfLowerB) && !(selfUpperA || selfUpperB))
         {
@@ -217,7 +229,7 @@ public sealed class HeightmapTerrainMesher
             // edge ("top" params).
             EmitCliffQuad(verts, normals, colors, uvs, indices,
                 bl: topA, tl: botA, tr: botB, br: topB,
-                normal: -faceDirPlus, kind);
+                normal: -faceDirPlus, kind, biomeId);
         }
         // else: either flat (no gap) or a twisted corner (one side self-upper,
         // other side self-lower). Skip twisted corners — pathological edge
@@ -259,11 +271,11 @@ public sealed class HeightmapTerrainMesher
         List<Vector3> verts, List<Vector3> normals, List<Color> colors,
         List<Vector2> uvs, List<int> indices,
         Vector3 bl, Vector3 tl, Vector3 tr, Vector3 br,
-        Vector3 normal, TileKind kind)
+        Vector3 normal, TileKind kind, byte biomeId)
     {
         var cell = TileAtlas.CellForSide(kind);
         var (u0, v0, u1, v1) = TileAtlas.CellUV(cell);
-        var tint = TileAtlas.TintFor(kind);
+        var tint = ApplyBiomeTint(TileAtlas.TintFor(kind), biomeId);
 
         var vi = verts.Count;
         verts.Add(bl); verts.Add(tl); verts.Add(tr); verts.Add(br);

@@ -248,6 +248,7 @@ public sealed class TileWorld
             snap.Corners[lx, lz, TerrainChunk.NE] = tc.Corners[lx, lz, TerrainChunk.NE];
             snap.Corners[lx, lz, TerrainChunk.NW] = tc.Corners[lx, lz, TerrainChunk.NW];
             snap.Kinds[lx, lz] = tc.Kinds[lx, lz];
+            snap.Biomes[lx, lz] = tc.Biomes[lx, lz];
         }
         _terrainChunks.TryGetValue((cx + 1, cz),     out var px);
         _terrainChunks.TryGetValue((cx,     cz + 1), out var pz);

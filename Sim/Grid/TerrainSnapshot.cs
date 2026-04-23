@@ -24,6 +24,10 @@ public sealed class TerrainSnapshot
     // Surface kind per tile.
     public readonly byte[,] Kinds = new byte[Size, Size];
 
+    // Biome id per tile — same indexing as Kinds. Mesher reads this to apply
+    // a per-biome tint on top of the base kind color.
+    public readonly byte[,] Biomes = new byte[Size, Size];
+
     // East rim — for my tile at lx = Size-1, compare my SE/NE against the
     // +X neighbor's tile at lx=0 SW/NW. EastRim[lz, 0] = neighbor SW,
     // EastRim[lz, 1] = neighbor NW. When no +X neighbor exists (world edge),
