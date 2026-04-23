@@ -29,6 +29,17 @@ public partial class SimHost : Node
 	/// that cache per-chunk mesh state key off this to drop stale slots.</summary>
 	[Signal] public delegate void WorldRegeneratedEventHandler();
 
+	/// <summary>Emitted whenever <see cref="AwaitingWorldSelection"/> flips.
+	/// UI layers key off this to show/hide the fullscreen world-select panel
+	/// and gate in-sim widgets that can't run before settlement.</summary>
+	[Signal] public delegate void WorldSelectionChangedEventHandler();
+
+	/// <summary>True between boot/regen and the first <see cref="SettleAt"/>
+	/// call. While true the sim loop is paused and no tiles/entities exist —
+	/// only <see cref="Overworld"/> is populated. Flips false once the player
+	/// picks a land cell on the world map.</summary>
+	public bool AwaitingWorldSelection { get; private set; } = true;
+
 	public World World { get; } = new();
 	public TileWorld Tiles { get; } = new();
 	public SimLoop Loop { get; }
@@ -57,35 +68,52 @@ public partial class SimHost : Node
 	{
 		BuiltinBiomes.RegisterAll();
 		Overworld = WorldMapGenerator.Generate(WorldSeed);
-		WorldGen.Generate(Tiles, WorldSeed, WorldSize, WorldSize,
-			overworld: Overworld, center: CurrentMapCoord);
-		SeedColonyClaim();
-		SeedColonists();
-		ChunkTierSystem.Step(World, Tiles);
 		TimeOfDay.SetTicks(CalendarSystem.StartTicksOffset);
 		LogStartup();
+		EmitSignal(SignalName.WorldSelectionChanged);
 	}
 
+	/// <summary>Drop current pocket + overworld and roll a fresh world under
+	/// <paramref name="seed"/>. Returns to selection mode — caller must
+	/// <see cref="SettleAt"/> a land cell before the sim will tick again.</summary>
 	public void Regenerate(int seed)
 	{
 		CurrentSeed = seed;
 		DespawnAllEntities();
 		Tiles.Clear();
 		Overworld = WorldMapGenerator.Generate(seed);
-		WorldGen.Generate(Tiles, seed, WorldSize, WorldSize,
+		AwaitingWorldSelection = true;
+		EmitSignal(SignalName.WorldRegenerated);
+		EmitSignal(SignalName.WorldSelectionChanged);
+		GD.Print($"SimHost overworld regenerated. seed={seed}.");
+	}
+
+	/// <summary>Commit <paramref name="coord"/> as the playable pocket. Ocean
+	/// cells reject (returns false) per "no pocket on ocean" rule; land cells
+	/// generate the 3×3 tile neighborhood, seed the colony, resume the sim.</summary>
+	public bool SettleAt(WorldMapCoord coord)
+	{
+		if (!WorldMap.InBounds(coord.X, coord.Z)) return false;
+		if (Overworld.IsOcean(coord)) return false;
+		CurrentMapCoord = coord;
+		DespawnAllEntities();
+		Tiles.Clear();
+		WorldGen.Generate(Tiles, CurrentSeed, WorldSize, WorldSize,
 			overworld: Overworld, center: CurrentMapCoord);
 		SeedColonyClaim();
 		SeedColonists();
 		ChunkTierSystem.Step(World, Tiles);
+		AwaitingWorldSelection = false;
 		EmitSignal(SignalName.WorldRegenerated);
-		GD.Print($"SimHost regenerated. seed={seed}, chunks={Tiles.ChunkCount}.");
+		EmitSignal(SignalName.WorldSelectionChanged);
+		GD.Print($"SimHost settled. seed={CurrentSeed}, coord=({coord.X},{coord.Z}), chunks={Tiles.ChunkCount}.");
 		LogCurrentMapCell();
+		return true;
 	}
 
 	private void LogStartup()
 	{
-		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}, chunks={Tiles.ChunkCount}, tieredChunks={Tiles.ChunkStates.Count}.");
-		LogCurrentMapCell();
+		GD.Print($"SimHost ready. SimHz={SimConstants.SimHz}, speed={Loop.Speed}. Awaiting world selection.");
 	}
 
 	private void LogCurrentMapCell()
@@ -97,6 +125,7 @@ public partial class SimHost : Node
 
 	public override void _Process(double delta)
 	{
+		if (AwaitingWorldSelection) return;
 		Loop.Advance(delta);
 	}
 

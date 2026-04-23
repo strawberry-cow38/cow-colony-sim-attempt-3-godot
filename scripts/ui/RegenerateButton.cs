@@ -26,10 +26,24 @@ public partial class RegenerateButton : CanvasLayer
             OffsetLeft = 0,
             OffsetRight = 160,
             OffsetBottom = 32,
+            Visible = !_simHost.AwaitingWorldSelection,
         };
         _button.AddThemeFontSizeOverride("font_size", 14);
         _button.Pressed += OnPressed;
         AddChild(_button);
+
+        _simHost.WorldSelectionChanged += OnSelectionChanged;
+    }
+
+    public override void _ExitTree()
+    {
+        if (_simHost != null) _simHost.WorldSelectionChanged -= OnSelectionChanged;
+    }
+
+    private void OnSelectionChanged()
+    {
+        if (_simHost == null || _button == null) return;
+        _button.Visible = !_simHost.AwaitingWorldSelection;
     }
 
     private void OnPressed()
