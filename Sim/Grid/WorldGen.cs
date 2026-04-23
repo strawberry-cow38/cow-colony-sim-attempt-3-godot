@@ -113,11 +113,14 @@ public static class WorldGen
     // incongruous snow caps.
     public const int   SnowPeakHeightTiles = 60;
 
-    // Mixed-biome transition band. Tiles within this many tiles of a cell
-    // border whose neighbor cell's biome differs are tagged Mixed instead
-    // of the cell biome — softens the otherwise-hard biome seams produced
-    // by one-biome-per-cell sampling.
-    public const int   MixedBandTiles      = 24;
+    // Biome-border transition band. Tiles within this many tiles of a cell
+    // edge noise-dither between their own cell's biome and the nearest
+    // neighbor cell's biome, weighted by distance from the edge. Produces
+    // a fuzzy / interlocking-finger seam 32 tiles wide (this many on each
+    // side of the cell border) while keeping the bulk of each cell firmly
+    // single-biome. One chunk (16 tiles) felt natural without eating into
+    // the pure-biome interior.
+    public const int   BiomeBorderBandTiles = 16;
 
     public const float RainMinMm      = 0f;
     public const float RainMaxMm      = 2500f;
@@ -316,35 +319,34 @@ public static class WorldGen
             }
 
             tiles.SetTerrainHeight(x, z, (short)height);
-            // One climate + biome per cell, then two overrides:
-            //   (a) tall peaks re-tag as Snow — except inside Savanna or
-            //       Desert cells where snow caps would read as incongruous
-            //       in a hot biome
-            //   (b) tiles near a cell border whose neighbor has a different
-            //       biome re-tag as Mixed to soften the blocky seams
-            // Snow-peak takes priority over Mixed so dominant peaks still
-            // read as snow even when they sit in a border band.
-            var cellXIdx = FloorDiv(x, Cell.SizeTiles);
-            var cellZIdx = FloorDiv(z, Cell.SizeTiles);
-            var cxi = cellXIdx - firstCellX;
-            var czi = cellZIdx - firstCellZ;
-            var tempC  = cellTemp[cxi, czi];
-            var rainMm = cellRain[cxi, czi];
-            var cellB  = cellBiome[cxi, czi];
+            // One climate + biome per cell, plus two overrides:
+            //   (a) Border-band dither — tiles within BiomeBorderBandTiles
+            //       of a cell edge may re-home to the nearest neighbor cell
+            //       based on a smooth noise value weighted by distance from
+            //       the edge. Produces an interlocking-finger transition
+            //       between two biomes (~32 tiles wide) without promoting
+            //       the tile's cell to a mixed biome.
+            //   (b) Snow peaks — tiles rising SnowPeakHeightTiles above sea
+            //       level re-tag as Snow, skipped for Savanna and Desert
+            //       host cells so hot biomes keep their identity at
+            //       altitude.
+            var ownCellX = FloorDiv(x, Cell.SizeTiles);
+            var ownCellZ = FloorDiv(z, Cell.SizeTiles);
+            var cxi = ownCellX - firstCellX;
+            var czi = ownCellZ - firstCellZ;
+            var lx = x - ownCellX * Cell.SizeTiles;
+            var lz = z - ownCellZ * Cell.SizeTiles;
+            PickBorderCell(noise, x, z, cxi, czi, lx, lz,
+                cellBiome, cellsX, cellsZ,
+                out var pickedCxi, out var pickedCzi);
+            var tempC  = cellTemp[pickedCxi, pickedCzi];
+            var rainMm = cellRain[pickedCxi, pickedCzi];
+            var cellB  = cellBiome[pickedCxi, pickedCzi];
             var biome  = cellB;
             var allowSnowPeak = cellB != BiomeBuiltins.SavannaId
                              && cellB != BiomeBuiltins.DesertId;
             if (height - WaterLevelY >= SnowPeakHeightTiles && allowSnowPeak)
-            {
                 biome = BiomeBuiltins.SnowId;
-            }
-            else
-            {
-                var lx = x - cellXIdx * Cell.SizeTiles;
-                var lz = z - cellZIdx * Cell.SizeTiles;
-                if (IsNearDifferentBiomeBorder(cxi, czi, lx, lz, cellB, cellBiome, cellsX, cellsZ))
-                    biome = BiomeBuiltins.MixedId;
-            }
             tiles.SetTerrainClimate(x, z, tempC, rainMm);
             tiles.SetTerrainBiome(x, z, biome);
             // Lake-bed columns tag kind = Water to signal the mesher to emit
@@ -791,26 +793,54 @@ public static class WorldGen
 
     private static int FloorDiv(int a, int b) => (a / b) - (a % b < 0 ? 1 : 0);
 
-    // True when the tile sits within MixedBandTiles of a cell-border that
-    // separates it from a neighbor cell of a different biome. 4-neighbor
-    // only (N/S/E/W); diagonals are skipped — the 4-neighbor check already
-    // covers every border that matters and corner seams are thin enough
-    // that the extra bookkeeping isn't worth it.
-    private static bool IsNearDifferentBiomeBorder(
-        int cxi, int czi, int lx, int lz,
-        byte cellB, byte[,] cellBiome, int cellsX, int cellsZ)
+    // Pick the cell a border-band tile belongs to. If the tile is within
+    // BiomeBorderBandTiles of its nearest cell edge AND that edge has an
+    // in-bounds neighbor of a different biome, a smooth noise dither
+    // (weighted by distance to the edge) may re-home the tile to the
+    // neighbor's cell. At the edge itself the coin flip is ~50/50; at the
+    // inner boundary of the band the tile always stays in its own cell.
+    // Tiles outside the band always stay put.
+    private static void PickBorderCell(
+        NoiseStack noise, int x, int z,
+        int selfCxi, int selfCzi, int lx, int lz,
+        byte[,] cellBiome, int cellsX, int cellsZ,
+        out int pickedCxi, out int pickedCzi)
     {
-        const int Band = MixedBandTiles;
+        pickedCxi = selfCxi;
+        pickedCzi = selfCzi;
+
         var lastLocal = Cell.SizeTiles - 1;
-        if (lx < Band && cxi > 0
-            && cellBiome[cxi - 1, czi] != cellB) return true;
-        if (lastLocal - lx < Band && cxi < cellsX - 1
-            && cellBiome[cxi + 1, czi] != cellB) return true;
-        if (lz < Band && czi > 0
-            && cellBiome[cxi, czi - 1] != cellB) return true;
-        if (lastLocal - lz < Band && czi < cellsZ - 1
-            && cellBiome[cxi, czi + 1] != cellB) return true;
-        return false;
+        var distW = lx;
+        var distE = lastLocal - lx;
+        var distS = lz;
+        var distN = lastLocal - lz;
+        var minDist = Math.Min(Math.Min(distW, distE), Math.Min(distS, distN));
+        if (minDist >= BiomeBorderBandTiles) return;
+
+        // Candidate neighbor along the nearest edge only — corners pick one
+        // or the other based on ties, which keeps the fingers unambiguous
+        // and avoids a double dither that would wash out the finger shape.
+        var nxi = selfCxi;
+        var nzi = selfCzi;
+        if (distW == minDist && selfCxi > 0)                 nxi = selfCxi - 1;
+        else if (distE == minDist && selfCxi < cellsX - 1)   nxi = selfCxi + 1;
+        else if (distS == minDist && selfCzi > 0)            nzi = selfCzi - 1;
+        else if (distN == minDist && selfCzi < cellsZ - 1)   nzi = selfCzi + 1;
+        else return; // at world edge — no neighbor to dither with
+
+        // No transition if neighbor has the same biome: nothing to blend.
+        var selfB = cellBiome[selfCxi, selfCzi];
+        var nbrB  = cellBiome[nxi, nzi];
+        if (selfB == nbrB) return;
+
+        var n01 = (noise.BiomeBorder.GetNoise(x, z) + 1f) * 0.5f; // 0..1
+        var t   = minDist / (float)BiomeBorderBandTiles;          // 0..1
+        var threshold = 0.5f + 0.5f * t;
+        if (n01 > threshold)
+        {
+            pickedCxi = nxi;
+            pickedCzi = nzi;
+        }
     }
 
     private static float Smoothstep(float edge0, float edge1, float x)
