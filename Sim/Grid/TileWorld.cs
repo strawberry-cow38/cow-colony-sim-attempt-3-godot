@@ -20,6 +20,16 @@ public sealed class TileWorld
     // entity) so the pathfinder doesn't have to touch the ECS.
     private readonly HashSet<TilePos> _blockers = new();
 
+    /// <summary>
+    /// Half-extent of the playable pocket in tiles (XZ). Tiles outside
+    /// [-PlayableBoundsHalf, PlayableBoundsHalf) on either axis are treated
+    /// as unreachable by <see cref="Pathfinding.Walkability.IsStandable"/>
+    /// even though terrain exists there (neighbor cells are rendered as
+    /// coarse LOD backdrop, not walkable ground). Zero or negative disables
+    /// the check — tests and unbounded scenarios leave it at 0.
+    /// </summary>
+    public int PlayableBoundsHalf { get; set; } = 0;
+
     // Planned river paths, stamped in by WorldGen after generation runs.
     // Empty until Generate finishes. Consulted by RiverDebugRenderer to draw
     // flow-direction arrows and (eventually) by water-wheel / fish systems.
@@ -127,6 +137,7 @@ public sealed class TileWorld
         _chunksByCell.Clear();
         _terrainChunks.Clear();
         _blockers.Clear();
+        PlayableBoundsHalf = 0;
         RiverPaths = Array.Empty<RiverPath>();
         MutationTick++;
     }

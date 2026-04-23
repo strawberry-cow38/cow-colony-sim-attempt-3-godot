@@ -104,6 +104,7 @@ public partial class SimHost : Node
 		Tiles.Clear();
 		WorldGen.Generate(Tiles, CurrentSeed, WorldSize, WorldSize,
 			overworld: Overworld, center: CurrentMapCoord);
+		Tiles.PlayableBoundsHalf = PocketSize / 2;
 		var half = WorldSize / 2;
 		JobBoard = new JobBoard(
 			new TilePos(-half, 0, -half),
