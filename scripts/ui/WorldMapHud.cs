@@ -5,7 +5,7 @@ using CowColonySim.Sim.Grid;
 namespace CowColonySim.UI;
 
 /// <summary>
-/// Toggleable overlay (M key) showing the 100×100 overworld map as a
+/// Toggleable overlay (M key) showing the 400×400 overworld map as a
 /// biome-colored grid. Hover a cell to see its coordinate, biome, temp,
 /// rainfall. The currently-loaded pocket is marked with a yellow outline.
 ///
@@ -14,7 +14,8 @@ namespace CowColonySim.UI;
 /// </summary>
 public sealed partial class WorldMapHud : CanvasLayer
 {
-    private const int PixelsPerCell = 6;
+    // 2 px per cell keeps the 400×400 map within 800×800 screen pixels.
+    private const int PixelsPerCell = 2;
     private const int MapWidthPx = WorldMap.Width * PixelsPerCell;
     private const int MapHeightPx = WorldMap.Height * PixelsPerCell;
     private const int Margin = 16;
@@ -54,10 +55,13 @@ public sealed partial class WorldMapHud : CanvasLayer
         };
         _panel.AddChild(_mapImage);
 
+        // Floor at 4px so a single-cell marker stays visible when
+        // PixelsPerCell drops below that on large maps.
+        var markerSize = Mathf.Max(PixelsPerCell, 4);
         _marker = new ColorRect
         {
             Color = new Color(1f, 0.92f, 0.10f, 1f),
-            Size = new Vector2(PixelsPerCell, PixelsPerCell),
+            Size = new Vector2(markerSize, markerSize),
             MouseFilter = Control.MouseFilterEnum.Ignore,
         };
         _mapImage.AddChild(_marker);

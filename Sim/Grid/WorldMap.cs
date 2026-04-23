@@ -4,7 +4,7 @@ using CowColonySim.Sim.Biomes;
 namespace CowColonySim.Sim.Grid;
 
 /// <summary>
-/// Coordinate on the abstract 2D world map. The map is a 100×100 grid of
+/// Coordinate on the abstract 2D world map. The map is a 400×400 grid of
 /// cells — each map cell is a candidate "pocket" the player can drop into
 /// for the 3D playable region. Independent from <see cref="CellKey"/>,
 /// which addresses tile-cells inside a single playable region.
@@ -20,7 +20,7 @@ public readonly record struct WorldMapCoord(int X, int Z);
 public readonly record struct WorldMapCell(byte BiomeId, float TemperatureC, float RainfallMm);
 
 /// <summary>
-/// 100×100 abstract world map. Each cell carries a biome + climate stamped
+/// 400×400 abstract world map. Each cell carries a biome + climate stamped
 /// once at worldgen via <see cref="WorldMapGenerator"/>. The player's
 /// playable 3D region (a single <see cref="Cell"/>-sized pocket) is
 /// generated on demand from a chosen map cell — terrain, rivers, and
@@ -28,8 +28,8 @@ public readonly record struct WorldMapCell(byte BiomeId, float TemperatureC, flo
 /// </summary>
 public sealed class WorldMap
 {
-    public const int Width  = 100;
-    public const int Height = 100;
+    public const int Width  = 400;
+    public const int Height = 400;
 
     private readonly byte[,] _biome = new byte[Width, Height];
     private readonly float[,] _temp = new float[Width, Height];
