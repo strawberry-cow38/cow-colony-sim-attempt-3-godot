@@ -83,14 +83,6 @@ public static class WorldGen
     // gently rolling rather than jagged.
     private const float DetailAmplitude = 1.3f;
 
-    // Coastal border. Every map is ringed by ocean — tiles within
-    // CoastRadiusTiles of the map edge blend from normal terrain toward a
-    // submerged floor so a natural shoreline ringed with sand shores forms.
-    // The "infinite" far ocean is a flat quad in scene.cs; this fade handles
-    // the in-map transition from land to coast.
-    private const int   CoastRadiusTiles  = 48;
-    private const float CoastFloor        = -5f;
-
     // Climate + biome come from the WorldMap cell this playable pocket
     // represents — one <see cref="WorldMapCell"/> stamps the entire
     // 256×256 region with a single biome + base climate. Per-tile climate
@@ -128,11 +120,6 @@ public static class WorldGen
         var halfX = sizeX / 2;
         var halfZ = sizeZ / 2;
 
-        // Scale coast radius down on small maps so the whole grid doesn't get
-        // submerged. On a 32x32 test map, a 48-tile rim would flood everything;
-        // clamp so at least half the map stays dry by default.
-        var coastRadius = Math.Min(CoastRadiusTiles, Math.Min(sizeX, sizeZ) / 4);
-
         // Plan river paths up-front so the heightmap pass can suppress
         // mountains / big hills along the river corridor. Paths store world-
         // space tile coords; the helper converts to array indices when it
@@ -149,9 +136,9 @@ public static class WorldGen
                 var z = zi - halfZ;
 
                 // Continent: slow, gentle base elevation — rolling pasture.
-                // Baseline shifted up so interior stays dry by default;
-                // coast fade below pulls the outer rim under water to form
-                // a shoreline.
+                // No coast fade — the playable pocket is one overworld
+                // cell, not an island. The ocean, if any, lives in the
+                // low-LOD neighbor backdrop (phase 4).
                 var continent = noise.Continent.GetNoise(x, z);      // -1..1
                 var baseH = 6f + continent * 4f;                      // +2..+10
 
@@ -187,19 +174,6 @@ public static class WorldGen
                 // drops a tile below sea level while its neighbor stays on
                 // land) via the Cap rule below. Ridge noise supplies all the
                 // peak/valley drama directly.
-
-                // Coastal fade: cells near the map edge blend toward a
-                // submerged floor so every map has a natural shore. Uses
-                // Chebyshev distance so the entire rim is submerged evenly
-                // instead of only the four cardinal edges.
-                var edgeDist = Math.Min(Math.Min(xi, sizeX - 1 - xi),
-                                        Math.Min(zi, sizeZ - 1 - zi));
-                if (coastRadius > 0 && edgeDist < coastRadius)
-                {
-                    var coastT = 1f - (edgeDist / (float)coastRadius);
-                    var coastBlend = Smoothstep(0f, 1f, coastT);
-                    baseH = Lerp(baseH, CoastFloor, coastBlend);
-                }
 
                 // Detail pass. Capped < CliffDelta so flat plains never spike.
                 // Muted on mountain plateaus (scaled by 1 - mountainWeight) so

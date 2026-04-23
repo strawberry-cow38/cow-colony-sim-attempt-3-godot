@@ -1,33 +1,29 @@
 using Godot;
-using CowColonySim.Render;
 using CowColonySim.Sim;
 using CowColonySim.Sim.Grid;
 
 namespace CowColonySim.UI;
 
 /// <summary>
-/// Wireframe box outlining the streaming cell under the mouse cursor. A cell
-/// is 16×16 chunks = 256×256 tiles = 384m on each side, so the box is useful
-/// for eyeballing which cell a spot in the world falls into when tweaking
-/// paging or debugging cell-scoped systems.
+/// Wireframe box outlining the playable pocket — a single 256×256 tile
+/// region centered on the world origin, representing the overworld cell
+/// the player is currently inside. With streaming gone, there is exactly
+/// one pocket per session; the box is fixed geometry, no per-frame
+/// re-hit-testing.
 ///
-/// Geometry is one static unit-cube wireframe (12 line segments). We move /
-/// scale the instance each frame; no mesh rebuild. Uses an unshaded material
-/// so it stays readable in fog or at night.
+/// Uses an unshaded material so it stays readable in fog or at night.
 /// </summary>
 public partial class CellHighlight3D : Node3D
 {
-    // Vertical span of the box in meters. Cells cover full world height; a
-    // fixed span that comfortably clears any generated terrain keeps the
-    // outline in view without computing per-cell max heights.
+    // Vertical span of the box in meters. The pocket covers full world
+    // height; a fixed span that comfortably clears any generated terrain
+    // keeps the outline in view without scanning for a max elevation.
     private const float BoxHeightMeters = 300f;
 
     private MeshInstance3D? _mesh;
-    private SimHost? _sim;
 
     public override void _Ready()
     {
-        _sim = GetNode<SimHost>("/root/SimHost");
         _mesh = new MeshInstance3D
         {
             Mesh = BuildWireBox(),
@@ -39,37 +35,17 @@ public partial class CellHighlight3D : Node3D
                 NoDepthTest = false,
             },
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
-            Visible = false,
+            Visible = true,
         };
         AddChild(_mesh);
-    }
-
-    public override void _Process(double delta)
-    {
-        if (_mesh == null || _sim == null) return;
-        var cam = GetViewport()?.GetCamera3D();
-        if (cam == null) { _mesh.Visible = false; return; }
-
-        var mouse = GetViewport()!.GetMousePosition();
-        var origin = cam.ProjectRayOrigin(mouse);
-        var dir = cam.ProjectRayNormal(mouse);
-        if (Mathf.Abs(dir.Y) < 1e-5f) { _mesh.Visible = false; return; }
-        var t = -origin.Y / dir.Y;
-        if (t < 0f) { _mesh.Visible = false; return; }
-        var hit = origin + dir * t;
-        var tile = TileCoord.WorldToTile(hit);
-        var surfaceY = WorldGen.SurfaceY(_sim.Tiles, tile.X, tile.Z);
-        var cell = Cell.FromTile(new TilePos(tile.X, surfaceY, tile.Z));
 
         var tileW = SimConstants.TileWidthMeters;
-        var cellMeters = Cell.SizeTiles * tileW;
-        var x0 = cell.X * cellMeters;
-        var z0 = cell.Z * cellMeters;
-        // Y floor at 0 (world origin). Height is fixed so the box clears any
-        // terrain in the cell without scanning for per-cell max elevation.
-        _mesh.Position = new Vector3(x0, 0f, z0);
-        _mesh.Scale = new Vector3(cellMeters, BoxHeightMeters, cellMeters);
-        _mesh.Visible = true;
+        var pocketMeters = Cell.SizeTiles * tileW;
+        // WorldGen centers the pocket on origin: tiles span [-half, half),
+        // so world-space extent is [-half*tileW, +half*tileW).
+        var origin = -(Cell.SizeTiles / 2) * tileW;
+        _mesh.Position = new Vector3(origin, 0f, origin);
+        _mesh.Scale = new Vector3(pocketMeters, BoxHeightMeters, pocketMeters);
     }
 
     // 12-edge wireframe on a [0,1]³ unit cube. Scaling the MeshInstance3D
