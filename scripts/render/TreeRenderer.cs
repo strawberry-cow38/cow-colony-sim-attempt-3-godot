@@ -33,6 +33,11 @@ public sealed partial class TreeRenderer : Node3D
         public MultiMesh Mesh = null!;
         public float NativeHeightMeters;
         public float TargetHeightMeters;
+        // Y offset (in native-mesh local units) between the mesh's pivot and
+        // its bottom face. baseY needs to be shifted by NativePivotToBottom
+        // * appliedScale so a tree whose .glb origin sits at the model center
+        // still lands its feet on the ground.
+        public float NativePivotToBottom;
     }
 
     public override void _Ready()
@@ -87,8 +92,10 @@ public sealed partial class TreeRenderer : Node3D
             GD.PushWarning($"TreeRenderer: failed to load mesh for {def.Name} (path={def.ModelPath})");
             return null;
         }
-        var nativeH = mesh.GetAabb().Size.Y;
+        var aabb = mesh.GetAabb();
+        var nativeH = aabb.Size.Y;
         if (nativeH <= 0.0001f) nativeH = 1f;
+        var pivotToBottom = -aabb.Position.Y;
         var mm = new MultiMesh
         {
             Mesh = mesh,
@@ -104,6 +111,7 @@ public sealed partial class TreeRenderer : Node3D
             Mesh = mm,
             NativeHeightMeters = nativeH,
             TargetHeightMeters = def.ModelHeightMeters > 0 ? def.ModelHeightMeters : def.TrunkHeightMeters + def.CanopyHeightMeters,
+            NativePivotToBottom = pivotToBottom,
         };
         _byKind[def.Id] = state;
         return state;
@@ -118,7 +126,11 @@ public sealed partial class TreeRenderer : Node3D
         var z = feet.Z + 0.5f;
         var baseY = feet.Y * CowColonySim.Sim.SimConstants.TileHeightMeters;
         var basis = Basis.Identity.Scaled(new Vector3(s, s, s));
-        return new Transform3D(basis, new Vector3(x, baseY, z));
+        // Shift up by the scaled pivot-to-bottom offset so the mesh's lowest
+        // point sits flush on baseY regardless of where the .glb's origin was
+        // authored (base vs center).
+        var footOffset = state.NativePivotToBottom * s;
+        return new Transform3D(basis, new Vector3(x, baseY + footOffset, z));
     }
 
     private static Mesh? LoadFirstMesh(string resPath)

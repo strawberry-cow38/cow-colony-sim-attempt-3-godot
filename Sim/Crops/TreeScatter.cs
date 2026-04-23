@@ -102,6 +102,14 @@ public static class TreeScatter
         var under = tiles.Get(new TilePos(x, sy - 1, z));
         if (under.Kind != TileKind.Solid && under.Kind != TileKind.Floor) return false;
         if (!Walkability.IsStandable(tiles, new TilePos(x, sy, z))) return false;
+        // Visual corners can slope even when the tile column's Y matches.
+        // Each 4-corner delta must be 0 on this tile AND the 4 neighbors so
+        // the tree sits flush on a truly level patch, not a ramp face.
+        if (tiles.TerrainSlope(x, z) != 0) return false;
+        if (tiles.TerrainSlope(x + 1, z) != 0) return false;
+        if (tiles.TerrainSlope(x - 1, z) != 0) return false;
+        if (tiles.TerrainSlope(x, z + 1) != 0) return false;
+        if (tiles.TerrainSlope(x, z - 1) != 0) return false;
         var s1 = WorldGen.SurfaceY(tiles, x + 1, z);
         var s2 = WorldGen.SurfaceY(tiles, x - 1, z);
         var s3 = WorldGen.SurfaceY(tiles, x, z + 1);
