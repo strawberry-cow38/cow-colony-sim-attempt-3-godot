@@ -16,13 +16,20 @@ public partial class Main : Node3D
 		ProcessCommandLine();
 	}
 
+	private WorldMapCoord? _autoSettleCoord;
+
 	private void ProcessCommandLine()
 	{
 		var args = OS.GetCmdlineArgs();
-		var autoSettle = false;
 		foreach (var raw in args)
 		{
-			if (raw == "--settle-at-center") autoSettle = true;
+			if (raw == "--settle-at-center") _autoSettleCoord = WorldMap.Center;
+			else if (raw.StartsWith("--settle-at="))
+			{
+				var s = raw.Substring("--settle-at=".Length).Split(',');
+				if (s.Length == 2 && int.TryParse(s[0], out var x) && int.TryParse(s[1], out var z))
+					_autoSettleCoord = new WorldMapCoord(x, z);
+			}
 			else if (raw.StartsWith("--screenshot="))
 			{
 				_screenshotPending = true;
@@ -33,7 +40,7 @@ public partial class Main : Node3D
 				int.TryParse(raw.Substring("--after-frames=".Length), out _screenshotDelayFrames);
 			}
 		}
-		if (autoSettle)
+		if (_autoSettleCoord.HasValue)
 		{
 			CallDeferred(nameof(AutoSettle));
 		}
@@ -42,8 +49,40 @@ public partial class Main : Node3D
 	private void AutoSettle()
 	{
 		var sim = GetNode<SimHost>("/root/SimHost");
-		sim.SettleAt(WorldMap.Center);
-		GD.Print("Main: auto-settled at world center.");
+		var coord = _autoSettleCoord!.Value;
+		// Debug screenshots want a tree-friendly biome so we can actually
+		// *see* the trees. Spiral out from the requested coord until we
+		// hit grassland / forest / taiga / jungle / savanna.
+		if (!IsTreeFriendly(sim, coord))
+		{
+			for (var r = 1; r < WorldMap.Size; r++)
+			{
+				var found = false;
+				for (var dx = -r; dx <= r && !found; dx++)
+				for (var dz = -r; dz <= r && !found; dz++)
+				{
+					if (Math.Abs(dx) != r && Math.Abs(dz) != r) continue;
+					var c = new WorldMapCoord(_autoSettleCoord.Value.X + dx, _autoSettleCoord.Value.Z + dz);
+					if (!WorldMap.InBounds(c.X, c.Z)) continue;
+					if (IsTreeFriendly(sim, c)) { coord = c; found = true; }
+				}
+				if (found) break;
+			}
+		}
+		sim.SettleAt(coord);
+		GD.Print($"Main: auto-settled at ({coord.X},{coord.Z}).");
+	}
+
+	private static bool IsTreeFriendly(SimHost sim, WorldMapCoord c)
+	{
+		if (!WorldMap.InBounds(c.X, c.Z)) return false;
+		if (sim.Overworld.IsOcean(c)) return false;
+		var biome = sim.Overworld.Get(c).BiomeId;
+		return biome == Sim.Biomes.BiomeBuiltins.GrasslandId
+			|| biome == Sim.Biomes.BiomeBuiltins.TemperateForestId
+			|| biome == Sim.Biomes.BiomeBuiltins.TaigaId
+			|| biome == Sim.Biomes.BiomeBuiltins.JungleId
+			|| biome == Sim.Biomes.BiomeBuiltins.SavannaId;
 	}
 
 	public override void _Process(double delta)
