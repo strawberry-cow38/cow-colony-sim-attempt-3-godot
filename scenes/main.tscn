@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3 uid="uid://b0cowcolsimmain"]
+[gd_scene load_steps=19 format=3 uid="uid://b0cowcolsimmain"]
 
 [ext_resource type="Script" path="res://scripts/core/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://scripts/render/GridRenderer.cs" id="2_grid"]
@@ -16,6 +16,9 @@
 [ext_resource type="Script" path="res://scripts/ui/WorldMapHud.cs" id="15_worldmap"]
 [ext_resource type="Script" path="res://scripts/audio/AmbientAudio.cs" id="16_ambient"]
 [ext_resource type="Script" path="res://scripts/render/TreeRenderer.cs" id="17_trees"]
+[ext_resource type="Script" path="res://scripts/ui/Selection/SelectionController.cs" id="18_selctrl"]
+[ext_resource type="Script" path="res://scripts/ui/Selection/SelectionGhost.cs" id="19_selghost"]
+[ext_resource type="Script" path="res://scripts/ui/Selection/SelectionPanel.cs" id="20_selpanel"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -76,3 +79,12 @@ script = ExtResource("16_ambient")
 
 [node name="TreeRenderer" type="Node3D" parent="."]
 script = ExtResource("17_trees")
+
+[node name="SelectionController" type="Node" parent="."]
+script = ExtResource("18_selctrl")
+
+[node name="SelectionGhost" type="Node3D" parent="."]
+script = ExtResource("19_selghost")
+
+[node name="SelectionPanel" type="CanvasLayer" parent="."]
+script = ExtResource("20_selpanel")
