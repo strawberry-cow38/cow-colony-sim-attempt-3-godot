@@ -131,8 +131,11 @@ public sealed partial class TreeRenderer : Node3D
         // Clamp sapling scale — pure growth=0 reads as invisible.
         var growthScale = Mathf.Lerp(0.25f, 1.0f, growth);
         var s = (state.TargetHeightMeters / state.NativeHeightMeters) * growthScale;
-        var x = feet.X + 0.5f;
-        var z = feet.Z + 0.5f;
+        // Tiles are 1.5m wide, not 1m — match TileMath.FeetOfTile so tree
+        // trunks line up with the ColonistRenderer's capsule on the same tile.
+        var tw = CowColonySim.Sim.SimConstants.TileWidthMeters;
+        var x = feet.X * tw + tw * 0.5f;
+        var z = feet.Z * tw + tw * 0.5f;
         var baseY = feet.Y * CowColonySim.Sim.SimConstants.TileHeightMeters;
         var basis = Basis.Identity.Scaled(new Vector3(s, s, s));
         // Shift so the mesh's AABB centroid lands over the tile center in X/Z
