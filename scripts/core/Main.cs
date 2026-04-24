@@ -1,3 +1,4 @@
+using System;
 using Godot;
 using CowColonySim.Sim.Grid;
 
@@ -55,7 +56,7 @@ public partial class Main : Node3D
 		// hit grassland / forest / taiga / jungle / savanna.
 		if (!IsTreeFriendly(sim, coord))
 		{
-			for (var r = 1; r < WorldMap.Size; r++)
+			for (var r = 1; r < WorldMap.Width; r++)
 			{
 				var found = false;
 				for (var dx = -r; dx <= r && !found; dx++)
