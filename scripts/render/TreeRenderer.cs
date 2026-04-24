@@ -147,19 +147,58 @@ public sealed partial class TreeRenderer : Node3D
         if (err != Error.Ok) return null;
         var scene = doc.GenerateScene(state);
         if (scene == null) return null;
-        var mesh = FindFirstMesh(scene);
+        var merged = MergeAllMeshes(scene);
         scene.QueueFree();
-        return mesh;
+        return merged;
     }
 
-    private static Mesh? FindFirstMesh(Node n)
+    /// <summary>Walk every MeshInstance3D under <paramref name="root"/> and
+    /// copy its surfaces (with local transform baked in) into a single
+    /// ArrayMesh. Required because MultiMesh renders one Mesh resource per
+    /// instance; leaving trunk and canopy as sibling nodes gives MultiMesh
+    /// only one of the two.</summary>
+    private static ArrayMesh? MergeAllMeshes(Node root)
     {
-        if (n is MeshInstance3D mi && mi.Mesh != null) return mi.Mesh;
-        foreach (var child in n.GetChildren())
+        var merged = new ArrayMesh();
+        CollectInto(root, Transform3D.Identity, merged);
+        return merged.GetSurfaceCount() > 0 ? merged : null;
+    }
+
+    private static void CollectInto(Node n, Transform3D parentXform, ArrayMesh into)
+    {
+        var xform = parentXform;
+        if (n is Node3D n3d) xform = parentXform * n3d.Transform;
+        if (n is MeshInstance3D mi && mi.Mesh != null)
         {
-            var m = FindFirstMesh(child);
-            if (m != null) return m;
+            var src = mi.Mesh;
+            for (var s = 0; s < src.GetSurfaceCount(); s++)
+            {
+                var arrays = src.SurfaceGetArrays(s);
+                TransformPositions(arrays, xform);
+                into.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+                var mat = mi.GetActiveMaterial(s) ?? src.SurfaceGetMaterial(s);
+                if (mat != null) into.SurfaceSetMaterial(into.GetSurfaceCount() - 1, mat);
+            }
         }
-        return null;
+        foreach (var child in n.GetChildren()) CollectInto(child, xform, into);
+    }
+
+    private static void TransformPositions(Godot.Collections.Array arrays, Transform3D xform)
+    {
+        const int vertIdx = (int)Mesh.ArrayType.Vertex;
+        const int normIdx = (int)Mesh.ArrayType.Normal;
+        if (arrays[vertIdx].VariantType == Variant.Type.PackedVector3Array)
+        {
+            var verts = arrays[vertIdx].AsVector3Array();
+            for (var i = 0; i < verts.Length; i++) verts[i] = xform * verts[i];
+            arrays[vertIdx] = verts;
+        }
+        if (arrays.Count > normIdx && arrays[normIdx].VariantType == Variant.Type.PackedVector3Array)
+        {
+            var normals = arrays[normIdx].AsVector3Array();
+            var basis = xform.Basis.Inverse().Transposed();
+            for (var i = 0; i < normals.Length; i++) normals[i] = (basis * normals[i]).Normalized();
+            arrays[normIdx] = normals;
+        }
     }
 }
