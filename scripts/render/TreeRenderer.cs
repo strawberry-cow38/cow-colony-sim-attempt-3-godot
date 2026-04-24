@@ -38,6 +38,11 @@ public sealed partial class TreeRenderer : Node3D
         // * appliedScale so a tree whose .glb origin sits at the model center
         // still lands its feet on the ground.
         public float NativePivotToBottom;
+        // Native-space XZ delta from model pivot to AABB centroid. Apply with
+        // negation so the mesh centroid lands at tile center regardless of
+        // where blender authored the origin (off-pivot trunks).
+        public float NativePivotCenterOffsetX;
+        public float NativePivotCenterOffsetZ;
     }
 
     public override void _Ready()
@@ -96,6 +101,8 @@ public sealed partial class TreeRenderer : Node3D
         var nativeH = aabb.Size.Y;
         if (nativeH <= 0.0001f) nativeH = 1f;
         var pivotToBottom = -aabb.Position.Y;
+        var centerOffX = -(aabb.Position.X + aabb.Size.X * 0.5f);
+        var centerOffZ = -(aabb.Position.Z + aabb.Size.Z * 0.5f);
         var mm = new MultiMesh
         {
             Mesh = mesh,
@@ -112,6 +119,8 @@ public sealed partial class TreeRenderer : Node3D
             NativeHeightMeters = nativeH,
             TargetHeightMeters = def.ModelHeightMeters > 0 ? def.ModelHeightMeters : def.TrunkHeightMeters + def.CanopyHeightMeters,
             NativePivotToBottom = pivotToBottom,
+            NativePivotCenterOffsetX = centerOffX,
+            NativePivotCenterOffsetZ = centerOffZ,
         };
         _byKind[def.Id] = state;
         return state;
@@ -126,11 +135,14 @@ public sealed partial class TreeRenderer : Node3D
         var z = feet.Z + 0.5f;
         var baseY = feet.Y * CowColonySim.Sim.SimConstants.TileHeightMeters;
         var basis = Basis.Identity.Scaled(new Vector3(s, s, s));
-        // Shift up by the scaled pivot-to-bottom offset so the mesh's lowest
-        // point sits flush on baseY regardless of where the .glb's origin was
-        // authored (base vs center).
+        // Shift so the mesh's AABB centroid lands over the tile center in X/Z
+        // and the mesh's lowest point sits flush on baseY — handles .glb
+        // models whose origin was authored off-pivot (center vs base, trunk
+        // offset from canopy centroid, etc.).
         var footOffset = state.NativePivotToBottom * s;
-        return new Transform3D(basis, new Vector3(x, baseY + footOffset, z));
+        var xOffset = state.NativePivotCenterOffsetX * s;
+        var zOffset = state.NativePivotCenterOffsetZ * s;
+        return new Transform3D(basis, new Vector3(x + xOffset, baseY + footOffset, z + zOffset));
     }
 
     private static Mesh? LoadFirstMesh(string resPath)
